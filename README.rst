@@ -27,3 +27,18 @@ Deploy the lambdas, workflow, other resources::
 
   sls deploy
 
+You can test a function and see its logs::
+
+  sls invoke -f hello -l
+
+We have functions mirroring the AWS example:
+* OpenCase
+* AssignCase
+* WorkOnCase
+* EscalateCase
+* CloseCase
+
+We can invoke the OpenCase to test it in isolation, or to start the
+Step Function state machine once it's defined::
+
+  sls invoke -f OpenCase -l -d '{"input_case_id": "42"}'
