@@ -42,3 +42,9 @@ We can invoke the OpenCase to test it in isolation, or to start the
 Step Function state machine once it's defined::
 
   sls invoke -f OpenCase -l -d '{"input_case_id": "42"}'
+
+The state machine is defined in ``serverless.yml`` mirroring the AWS
+example. After we do the ``sls deploy`` again, we can test it in the
+AWS Console and see it works. Run it a few times, so it exercised both
+the happy path and the failure path.
+
