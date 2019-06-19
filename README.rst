@@ -32,6 +32,7 @@ You can test a function and see its logs::
   sls invoke -f hello -l
 
 We have functions mirroring the AWS example:
+
 * OpenCase
 * AssignCase
 * WorkOnCase
