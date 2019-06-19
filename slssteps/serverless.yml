@@ -43,6 +43,9 @@ stepFunctions:
           "Is Case Resolved":
             Type: Choice
             Choices: 
+            - Variable: "$.Case"
+              StringEquals: WAIT
+              Next: Wait A Day For Upload
             - Variable: "$.Status"
               NumericEquals: 1
               Next: Close Case
@@ -50,6 +53,11 @@ stepFunctions:
               NumericEquals: 0
               Next: Escalate Case
             # Default: DefaultState
+          "Wait A Day For Upload":
+            Type: Wait
+            Seconds: 86400
+            Comment: Simulate waiting for upload and how would we trigger OK exit
+            Next: Escalate Case
           "Close Case":
             Type: Task
             Resource:
