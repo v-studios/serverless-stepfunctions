@@ -17,6 +17,10 @@ plugins:
 stepFunctions:
   stateMachines:
     CallCenter:                 # SLS appends StepFunctionsStateMachine to logical name
+      events:                   # invokes StartAt function, e.g. with curl and input_case_id JSON
+        - http:
+            path: opencase
+            method: post
       definition:
         Comment: "AWS Step Functions state machine that automates call center support session."
         StartAt: Open Case

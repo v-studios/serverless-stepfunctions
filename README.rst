@@ -48,3 +48,10 @@ example. After we do the ``sls deploy`` again, we can test it in the
 AWS Console and see it works. Run it a few times, so it exercised both
 the happy path and the failure path.
 
+There is now an ``events`` stanza in the state machine, specifying an
+HTTP POST to /opencase. This will trigger the first step defined by
+the ``StartAt`` clause. You can pass ``event`` data to it like::
+
+  curl https://$URL_FROM_DEPLOYMENT.../dev/opencase -d '{"input_case_id": "My ID"}'
+
+If you look at the console you can see it flowed through, successfully in this case.
