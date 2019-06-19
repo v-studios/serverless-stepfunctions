@@ -54,7 +54,7 @@ stepFunctions:
             Type: Task
             Resource:
               Fn::GetAtt: [CloseCaseLambdaFunction, Arn]
-            End: true
+            End: True
           "Escalate Case":
             Type: Task
             Resource:
@@ -63,6 +63,7 @@ stepFunctions:
           "Fail":
             Type: Fail
             Cause: Engage Tier 2 Support
+            Error: Got the wrong random number Work On Case
     
 # TODO ignore ~ files in packaging
 functions:
