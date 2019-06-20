@@ -8,6 +8,7 @@ from botocore.exceptions import ClientError
 
 def my_worker(event, context):
     """Simple worker."""
+    logging.error("My worker trigger by S3 event: {}".format(event))
     activity_arn = os.environ.get('ACTIVITY_ARN', "")
     worker_name = "mytestworker"
     client = boto3.client('stepfunctions')
@@ -19,16 +20,18 @@ def my_worker(event, context):
         )
         logging.error("My worker response: {}".format(response))
         if my_case_status == 1:
-            client.send_task_success(
+            res = client.send_task_success(
                 taskToken=response["taskToken"],
                 output=response["input"]
             )
+            logging.error("response of send_task_success {}".format(res))
         else:
-            client.send_task_failure(
+            res = client.send_task_failure(
                 taskToken=response["taskToken"],
                 error='Unlucky',
                 cause='Unlucky Cause'
             )
+            logging.error("response of send_task_failure {}".format(res))
 
     except ClientError as e:
         logging.error(e)

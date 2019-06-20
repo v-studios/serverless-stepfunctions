@@ -14,7 +14,7 @@ UPLOAD_BUCKET_NAME = "doc-pdfs"
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger()
 LOG.setLevel(logging.INFO)
-S3 = boto3.client('s3', config=Config(signature_version='s3v4'))
+S3 = boto3.client('s3', config=Config(region_name='ap-southeast-1', signature_version='s3v4'))
 
 
 def api_http_get(event, _context):
@@ -45,7 +45,8 @@ def api_http_get(event, _context):
     # Might want ACL:public-read if NG needs to read and display directly, without API.
     params = {
         'Bucket': UPLOAD_BUCKET_NAME,
-        'Key': 'doc_pdf/' + filename,
+        # 'Key': 'doc-pdfs/' + filename,
+        'Key': filename,
         'ContentType': content_type,
         # 'ServerSideEncryption': 'AES256'
     }
