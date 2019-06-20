@@ -1,0 +1,90 @@
+service: socrates2
+
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+
+# TODO: I can't get the bucket_name variable refs working right, hard code them for now, sorry.
+
+provider:
+  name: aws
+  runtime: python3.6
+  environment:
+    ACTIVITY_ARN:
+      Fn::GetAtt: [SocratesActivity, Arn]
+    #BUCKET_NAME: ${self:custom.bucket_name}
+    BUCKET_NAME: "doc-pdfs-${env:USER}"
+    STATEMACHINE_ARN: ${self:resources.Outputs.MyStateMachine.Value} # so JobStart can start it
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+      - states:GetActivityTask
+      - states:SendTaskSuccess
+      - states:SendTaskFailure
+      - states:SendTaskHeartbeat
+      Resource: 
+        Fn::GetAtt: [SocratesActivity, Arn]
+
+  stage: dev
+  #region: ap-southeast-1        # hong
+  region: us-east-1             # chris
+
+custom:
+  bucket_name: doc-pdfs-${env:USER}        # bucket name is based on  $USER
+
+functions:
+  StartJob:
+    description: Start SM, return presigned upload URL to upload requested file
+    handler: handler.start_job
+    events:
+    - http:
+        path: startjob
+        method: GET
+        cors: true
+  SplitPdf:
+    handler: handler.split_pdf
+    description: Split uploaded PDF file
+    events:
+     - s3:
+         description: PDF multipage document created in doc_pdf/
+         bucket: doc-pdfs-${env:USER}    # TODO use the custom or environment var
+         #bucket: ${self:custom:bucket_name}
+         #bucket: ${self:environment:BUCKET_NAME}
+         event: s3:ObjectCreated:*
+         # TODO: restrict to /doc_pdfs/*.pdf pattern
+  get_upload_url:
+
+stepFunctions:
+  Socrates:
+    stepfunc1:
+      definition:
+        StartAt: StartJob
+        States:
+          StartJob:
+            Type: Task
+            Resource: 
+              Fn::GetAtt: [StartJobLambdaFunction, Arn]
+            Next: WaitForUpload
+          WaitForUpload:
+            # TODO: How do we Fail if we time out waiting for upload?
+            Type: Wait
+            Seconds: 86400      # 24 hours
+            Next: SplitPdf
+            Resource: 
+              Fn::GetAtt: [SplitPdfLambdaFunction, Arn]
+            Next: DeclareVictory
+          DeclareVictory:
+            Type: Pass
+            End: true
+          Fail:
+            Type: Fail
+  activities:
+    # Activities are just ARNs, how are they associated with Tasks?
+    - SocratesActivity
+
+resources:
+  Outputs:
+    MyStateMachine:
+      Description: the ARN of our StateMachine so Lambda can start it
+      Value:
+        Ref: MyStateMachine
