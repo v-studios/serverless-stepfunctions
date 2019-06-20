@@ -36,6 +36,20 @@ functions:
     handler: handler.escalate
   MyWorker:
     handler: worker.my_worker
+    events:
+     - s3:
+         description: PDF multipage document created in doc_pdf/
+         bucket: doc-pdfs
+         event: s3:ObjectCreated:*
+
+  get_upload_url:
+    handler: doc_get_upload_url.api_http_get
+    events:
+    - http:
+        path: get_upload_url
+        method: GET
+        cors: true
+
 
 stepFunctions:
   stateMachines:
