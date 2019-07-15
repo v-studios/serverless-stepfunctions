@@ -1,14 +1,28 @@
 service: stepFunctionsTest
 
 plugins:
+  - serverless-python-requirements
   - serverless-step-functions
   - serverless-pseudo-parameters
+
+package:
+  exclude:
+    - node_modules/**
+    - venv/**
+    - .venv*/**
+    - README.md
+    - package.json
+    - package-lock.json
+    - .git/**
 
 provider:
   name: aws
   runtime: python3.6
   environment:
-    ACTIVITY_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:hongActivity" ] ]  }
+    SF_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:MVPStepFunction" ] ]  }
+    ACTIVITY_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:waitForUploadActivity" ] ]  }
+    REGION: ${self:provider.region}
+    PDFUPLOAD_TABLE: PDFUpload-${self:provider.stage}
   iamRoleStatements:
     - Effect: Allow
       Action:
@@ -16,7 +30,39 @@ provider:
         - states:SendTaskSuccess
         - states:SendTaskFailure
         - states:SendTaskHeartbeat
-      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:hongActivity" ] ]  }
+      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:waitForUploadActivity" ] ]  }
+    - Effect: Allow
+      Action:
+        - states:StartExecution
+      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:MVPStepFunction" ] ]  }
+    - Effect: Allow
+      Action:
+        - s3:DeleteObject
+        - s3:GetObject
+        - s3:PutObject
+        - s3:ListBucket
+      Resource:
+        - Fn::Join:
+          - ''
+          - - 'arn:'
+            - Ref: AWS::Partition
+            - ':s3:::doc-pdfs'
+        - Fn::Join:
+          - ''
+          - - 'arn:'
+            - Ref: AWS::Partition
+            - ':s3:::doc-pdfs/*'
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+        - dynamodb:DescribeTable
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.PDFUPLOAD_TABLE}"
+
 
 
 # you can overwrite defaults here
@@ -24,111 +70,68 @@ provider:
   region: ap-southeast-1
 
 functions:
-  OpenCase:
-    handler: handler.open
-  AssignCase:
-    handler: handler.assign
-  WorkOnCase:
-    handler: handler.work
-  CloseCase:
-    handler: handler.close
-  EscalateCase:
-    handler: handler.escalate
-  MyWorker:
-    handler: worker.my_worker
+  SplitPDF:
+    handler: handler.split_doc_pdf
+  NotifyUpload:
+    handler: worker.notify_upload_worker
     events:
      - s3:
          description: PDF multipage document created in doc_pdf/
          bucket: doc-pdfs
          event: s3:ObjectCreated:*
-
-  get_upload_url:
+  GetUploadUrl:
     handler: doc_get_upload_url.api_http_get
     events:
-    - http:
-        path: get_upload_url
-        method: GET
-        cors: true
-
-
+      - http:
+          path: get_upload_url
+          method: GET
+          cors: true
+  ReturnPresignedUrl:
+    handler: handler.return_presigned_url
+  
 stepFunctions:
   stateMachines:
-    stepfunc1:
-      events:
-        - http:
-            path: opencase
-            method: POST
-            cors: true
+    MVPstepfunc:
+      name: MVPStepFunction
       definition:
-        Comment: "Simple example to understand step functions"
-        StartAt: OpenCase
+        Comment: "First step for MVP"
+        StartAt: ReturnPresignedUrl
         States:
-          OpenCase:
+          ReturnPresignedUrl:
             Type: Task
-            # Resource: { "Fn::Join" : [":", ["arn:aws:lambda:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "function:${self:service}-dev-open_case" ] ]  }
             Resource: 
-              Fn::GetAtt: [OpenCaseLambdaFunction, Arn]
-            Next: WaitCase
-          WaitCase:
-            Type: Parallel
-            Next: ActivityWaitCase
-            Branches:
-            - StartAt: Wait 20s
-              States:
-                Wait 20s:
-                  Type: Wait
-                  Seconds: 20
-                  End: true
-            - StartAt: Pass
-              States:
-                Pass:
-                  Type: Pass
-                  Next: Wait 10s
-                Wait 10s:
-                  Type: Wait
-                  Seconds: 10
-                  End: true
-          ActivityWaitCase:
+              Fn::GetAtt: [ReturnPresignedUrlLambdaFunction, Arn]
+            Next: WaitForUpload
+          WaitForUpload:
             Type: Task
-            Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:hongActivity" ] ]  }
+            Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:waitForUploadActivity" ] ]  }
             TimeoutSeconds: 300
             HeartbeatSeconds: 60
-            Next: AssignCase
-          AssignCase:
+            Next: SplitPDF
+          SplitPDF:
             Type: Task
-            # Resource: { "Fn::Join" : [":", ["arn:aws:lambda:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "function:${self:service}-dev-assign_case" ] ]  }
             Resource: 
-              Fn::GetAtt: [AssignCaseLambdaFunction, Arn]
-            Next: WorkOnCase
-          WorkOnCase:
-            Type: Task
-            # Resource: { "Fn::Join" : [":", ["arn:aws:lambda:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "function:${self:service}-dev-work_on_case" ] ]  }
-            Resource: 
-              Fn::GetAtt: [WorkOnCaseLambdaFunction, Arn]
-            Next: IsCaseResolved
-          IsCaseResolved:
-            Type: Choice
-            Choices:
-            - Variable: "$.status"
-              NumericEquals: 1
-              Next: CloseCase
-            - Variable: "$.status"
-              NumericEquals: 0
-              Next: EscalateCase
-          EscalateCase:
-            Type: Task
-            # Resource: { "Fn::Join" : [":", ["arn:aws:lambda:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "function:${self:service}-dev-escalate_case" ] ]  }
-            Resource: 
-              Fn::GetAtt: [EscalateCaseLambdaFunction, Arn]
-            Next: Fail
-          CloseCase:
-            Type: Task
-            # Resource: { "Fn::Join" : [":", ["arn:aws:lambda:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "function:${self:service}-dev-close_case" ] ]  }
-            Resource: 
-              Fn::GetAtt: [CloseCaseLambdaFunction, Arn]
+              Fn::GetAtt: [SplitPDFLambdaFunction, Arn]
             End: true
-          Fail:
-            Type: Fail
-            Cause: "No Matches!"
+
   activities:
-    - hongActivity
+    - waitForUploadActivity
+
+resources:
+  Resources:
+    PDFUploadDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          - 
+            AttributeName: uuid
+            AttributeType: S
+        KeySchema:
+          - 
+            AttributeName: uuid
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        TableName: ${self:provider.environment.PDFUPLOAD_TABLE}
