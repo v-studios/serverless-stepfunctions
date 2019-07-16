@@ -7,7 +7,6 @@ import os
 import random
 import uuid
 
-from botocore.client import Config
 import boto3
 
 UPLOAD_BUCKET_NAME = os.environ['BUCKET_NAME']
@@ -16,8 +15,7 @@ STATEMACHINE_ARN = os.environ['STATEMACHINE_ARN']
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger()
 LOG.setLevel(logging.INFO)
-#S3 = boto3.client('s3', config=boto3.session.Config(signature_version='s3v4'))
-S3 = boto3.client('s3', config=Config(signature_version='s3v4'))
+S3 = boto3.client('s3')         # Unneeded: config=boto3.session.Config(signature_version='s3v4'))
 
 
 def start_job(event, _context):
@@ -36,7 +34,7 @@ def start_job(event, _context):
 
     LOG.debug('event=%s', dumps(event))
     content_type = event['headers'].get('content-type')  # APIG downcases this
-    # TODO URLencode filename to defend against slashes etc
+    # TODO use basename and URLencode filename to defend against slashes etc
     filename = event['queryStringParameters'].get('filename')
     if not filename:
         return {'statusCode': 400,
