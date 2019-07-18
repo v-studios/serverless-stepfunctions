@@ -26,13 +26,15 @@ provider:
   #region: ap-southeast-1        # hong
   region: us-east-1             # chris
   environment:
+    STATEMACHINE_ARN:
+      Ref: SocratesChrisStepFunctionsStateMachine
     ACTIVITY_ARN: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForUpload"
     #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
     #BUCKET_NAME: ${self:custom.bucket_name}
     BUCKET_NAME: ${self:service}-${self:provider.stage}-${env:USER}
     # The Lambda will need this, but can't get it until after statemachine is created?
     # STATEMACHINE_ARN:
-    #   Fn::GetAtt: [SocratesStepFunctionsStateMachine, Arn]
+    #   Fn::GetAtt: [SocratesChrisStepFunctionsStateMachine, Arn]
     # Example ARNs for previously created SMs:
     # StateMachine ARN: arn:aws:states:us-east-1:304932368623:stateMachine:CallCenterStepFunctionsStateMachine-UexAbet6E2ow
     # IAM role ARN:     arn:aws:iam::304932368623:role/slssteps-dev-IamRoleStateMachineExecution-1MRICNKT0JZRH
@@ -92,21 +94,27 @@ functions:
          rules:
            - prefix: doc_pdf/
            - suffix: .pdf
-  #SplitPdf...
+  SplitPdf:
+    description: triggered by statemachine bread doc_pdf/jid/name.pdf into pages page_pdf/jid/0000.pdf
+    handler: handler.split_pdf
 
-# stepfunctions:
-#   stateMachines:
-#     SocratesChris:
-#       definition:
-#         StartAt: Uploaded
-#         States:
-#           Uploaded:
-#             Type: Task
-#             Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-Uploaded"
-#             Next: SplitPdf
-#           SplitPdf:
-#             Type: Pass
-#             End: true
+stepFunctions:
+  stateMachines:
+    SocratesChris:
+      tags:
+        owner: chris@v-studios.com
+      definition:
+        Comment: start at upload then drive the lambdas
+        StartAt: Uploaded
+        States:
+          Uploaded:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-Uploaded"
+            End: true
+          #   Next: SplitPdf
+          # SplitPdf:
+          #   Type: Pass
+          #   End: true
 #           # SplitPdf:
 #           #   Type: Task
 #           #   Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SplitPdf"
@@ -118,3 +126,4 @@ functions:
 #   activities:
 #     # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
 #     - WaitForSplit
+

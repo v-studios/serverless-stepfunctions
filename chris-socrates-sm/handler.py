@@ -10,7 +10,6 @@ import uuid
 import boto3
 
 UPLOAD_BUCKET_NAME = os.environ['BUCKET_NAME']
-#STATEMACHINE_ARN = os.environ['STATEMACHINE_ARN']
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger()
@@ -72,6 +71,9 @@ def get_upload_url(event, _context):
 def uploaded(event, context):
     """Handle the S3 ObjectCreated trigger: just record in DB and start the statemachine."""
     LOG.info(f'event: {dumps(event)}')
+
+    STATEMACHINE_ARN = os.environ['STATEMACHINE_ARN']
+    LOG.info(f'STATEMACHINE_ARN={STATEMACHINE_ARN}')
     s3rec = event['Records'][0]['s3']  # only the first, but there should only be one for S3
     LOG.info('s3rec={s3rec}')
     bucket = s3rec['bucket']['name']
@@ -90,6 +92,7 @@ def split_pdf(event, context):
 
     Returns nothing because this is triggered by state machine.
     """
+    LOG.info('event: {dumps(event)}')
     return {'statusCode': 200,
             'headers': {'Access-Control-Allow-Origin': '*'},
             'body': dumps({'msg': 'Not doing anything useful right now'})}
