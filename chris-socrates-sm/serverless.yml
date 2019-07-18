@@ -14,6 +14,17 @@ plugins:
   - serverless-step-functions
   - serverless-pseudo-parameters
 
+package:
+  # We want to package PyPDF, but really only with the pdf_split lambda
+  exclude:
+    - .pytest_cache/**
+    - .serverless/**
+    - Pipfile
+    - __pycache__/**
+    - event-s3upload.json
+    - serverless.yml
+    - test_handler.py
+
 # TODO: I can't get the bucket_name variable refs working right, hard code them for now, sorry.
 
 custom:
@@ -33,27 +44,6 @@ provider:
     #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
     #BUCKET_NAME: ${self:custom.bucket_name}
     BUCKET_NAME: ${self:service}-${self:provider.stage}-${env:USER}
-    # IAM role ARN:     arn:aws:iam::304932368623:role/slssteps-dev-IamRoleStateMachineExecution-1MRICNKT0JZRH
-  # SLS creates this by itself:
-  # ARN: arn:aws:iam::304932368623:role/socrates2-dev-IamRoleStateMachineExecution-4W2KL6QN2BJI
-  # Policy Name: dev-us-east-1-socrates2-statemachine
-  # Policy Inline:
-  #     {
-  #     "Version": "2012-10-17",
-  #     "Statement": [
-  #         {
-  #             "Action": [
-  #                 "lambda:InvokeFunction"
-  #             ],
-  #             "Resource": [
-  #                 "arn:aws:lambda:us-east-1:304932368623:function:socrates2-dev-StartJobf",
-  #                 "arn:aws:lambda:us-east-1:304932368623:function:socrates2-dev-SplitPdf"
-  #             ],
-  #             "Effect": "Allow"
-  #         }
-  #     ]
-  # }
-  # 
   iamRoleStatements:
     # Allow the lambda to generate a PSURL that can upload a file via put_object
     - Effect: Allow
@@ -117,7 +107,7 @@ stepFunctions:
             Next: SplitPdf
           SplitPdf:
             Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-StartStateMachine"
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SplitPdf"
             Next: DeclareVictory
           # Don't need to wait for Split to finish here since it operates in one lambda
           # Later will have to wait for all pages to be converted and OCRd

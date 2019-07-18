@@ -2,12 +2,16 @@
 """All Handlers for initial Socrates, will be split into files later."""
 
 from json import dumps, loads
+import io
 import logging
 import os
 import random
 import uuid
 
 import boto3
+
+from PyPDF2 import PdfFileReader, PdfFileWriter
+
 
 UPLOAD_BUCKET_NAME = os.environ['BUCKET_NAME']
 STATEMACHINE_ARN = os.environ['STATEMACHINE_ARN']
@@ -82,8 +86,10 @@ def uploaded(event, context):
     LOG.info(f'bucket={bucket} etag={etag} size={size} key={key} jid={jid} name_pdf={name_pdf}')
     sf = boto3.client('stepfunctions')
     sf_input = dumps({'bucket': bucket, 'key': key, 'etag': etag, 'size': size, 'jid': jid, 'name_pdf': name_pdf})
+    # For now, suffix jid with UUID so we can submit the same job URL again
+    uid = uuid.uuid4().hex
     res = sf.start_execution(stateMachineArn=STATEMACHINE_ARN,
-                             name=jid,  # use our JobID as unique SM invocation ID
+                             name=f'{jid}-{uid}',  # use our JobID as unique SM invocation ID
                              input=sf_input)  # state needs JSON str input
     LOG.info(f'sf.start_execurtion res={res}')
 
@@ -91,17 +97,33 @@ def uploaded(event, context):
 def start_state_machine(event, context):
     """Take input from start of statemachine, enter an event in DDB, pass useful bits to next state."""
     LOG.info(f'event: {dumps(event)}')
-    # TODO enter info into the DB.
+    # TODO enter info into the DB: jid+dt, event=uploaded, bucket, key, ...
     return {'bucket': event['bucket'], 'key': event['key'], 'jid': event['jid']}
 
 
 def split_pdf(event, context):
-    """TODO use PyPDF to split the PDF on S3, write pages to S3 page_pdf/uid/jid/0000.pdf.
+    """Use PyPDF to split the PDF on S3, write pages to S3 page_pdf/uid/jid/0000.pdf.
 
     Returns someting to the next state machine state, do_ocr_and_wait_for_completion.
     """
     LOG.info('event: {dumps(event)}')
-    return {'statusCode': 200,
-            'body': dumps({'msg': 'Not doing anything useful right now'})}
+    bucket = event['bucket']
+    key = event['key']
+    jid = event['jid']
+    body_stream = boto3.resource('s3').Object(bucket, key).get()['Body']
+    body = io.BytesIO(body_stream.read())
+    pdf = PdfFileReader(body, strict=False)  # log unexpected stream ends, don't raise
+    num_pages = pdf.getNumPages()
+    LOG.info(f'num_pages={num_pages}')
+    for page_num in range(num_pages):  # 0-based, want 1-based for humans?
+        pdf_writer = PdfFileWriter()
+        pdf_writer.addPage(pdf.getPage(page_num))
+        pdf_key = f'page_pdf/{jid}/{page_num:04}.pdf'
+        out = io.BytesIO()
+        pdf_writer.write(out)
+        out.seek(0)
+        S3.upload_fileobj(out, bucket, pdf_key)
+        LOG.info(f'uploaded page_num={page_num}')
+    return {'jid': jid, 'num_pages': num_pages}
 
 
