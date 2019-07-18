@@ -10,7 +10,7 @@ import uuid
 import boto3
 
 UPLOAD_BUCKET_NAME = os.environ['BUCKET_NAME']
-STATEMACHINE_ARN = os.environ['STATEMACHINE_ARN']
+#STATEMACHINE_ARN = os.environ['STATEMACHINE_ARN']
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger()
@@ -18,42 +18,40 @@ LOG.setLevel(logging.INFO)
 S3 = boto3.client('s3')         # Unneeded: config=boto3.session.Config(signature_version='s3v4'))
 
 
-
-
-def start_job(event, _context):
-    """Start StateMachine, return presigned URL to PUT file to our S3 bucket with read access.
+def get_upload_url(event, _context):
+    """Return presigned URL to PUT file to our S3 bucket with read access.
 
     Ensure the file is a PDF, in suffix and content type.
     Create a UUID jobid and use that for the SM invocation for tracking.
 
+    NOTE: our Lambda must be given s3:PutObject rights or PUT to the URL will be denied.
+
     Test like:
         curl -H "content-type: application/pdf" "$urlget?filename=doc.pdf"
-    then set a variable 'url' to the returned value, and upload (via PUT):
-        curl -v -H "content-type: application/pdf" --upload-file mydoc.pdf "$url"
+    then set a variable 'urlupload' to the returned value, and upload (via PUT):
+        curl -v -H "content-type: application/pdf" --upload-file mydoc.pdf "$urlupload"
     """
-    # Later we will want to require userid and include it in the PSURL so
-    # splitter can track it in the DB.
-
+    # Later want userid so we can include it in PSURL for tracking
     LOG.info('Got Task? event=%s', dumps(event))
-    LOG.info('Got Task? context=%s', dumps(dir(_context)))
-    content_type = event['headers'].get('content-type')  # APIG downcases this
-    # TODO use basename and URLencode filename to defend against slashes etc
-    filename = event['queryStringParameters'].get('filename')
-    if not filename:
+    LOG.debug('Got Task? context=%s', dumps(dir(_context)))
+    try:
+        filename = event['queryStringParameters']['filename']  # TODO: basename, URLdecode defense
+    except Exception as err:
         return {'statusCode': 400,
                 'body': 'Must supply query string "filename=..."'}
     if not filename.endswith('.pdf'):
         return {'statusCode': 400,
                 'body': 'Filename must end with ".pdf"'}
-    if content_type != 'application/pdf':
-        return {'statusCode': 400,
-                'body': 'Must specify "Content-Type: application/pdf"'}
-    LOG.info('api_http_get filename=%s content-type=%s',
-             filename, content_type)
+    try:
+        content_type = event['headers']['content-type']  # APIG downcases this
+        if content_type != 'application/pdf':
+            raise ValueError('Must specify Content-Type: application/pdf')
+    except Exception as err:
+        return {'statusCode': 400, 'body': f'{err}'}
+    LOG.info(f'content-type={content_type} filename={filename}')
 
     # We need to spec content-type since NG sets this header;
-    # ContentType is proper boto3 spelling, no dash; value must be lowercase.
-    # Might want ACL:public-read if NG needs to read and display directly, without API.
+    # ContentType is boto3 key spelling, no dash; the value must be lowercase.
     jid = uuid.uuid4().hex
     params = {
         'Bucket': UPLOAD_BUCKET_NAME,
@@ -65,16 +63,11 @@ def start_job(event, _context):
     url = S3.generate_presigned_url(ClientMethod='put_object',
                                     Params=params,
                                     ExpiresIn=3600)
-    LOG.info('url=%s', url)
+    LOG.debug('url=%s', url)
     return {'statusCode': 200,
-            'headers': {'Access-Control-Allow-Origin': '*'},
+            'headers': {'Access-Control-Allow-Origin': '*'},  # for CORS
             'body': dumps({'url': url})}
 
-
-def do_wait(event, context):
-    """Can we wait for task token?"""
-    LOG.info('DO_WAIT Got Task? event=%s', dumps(event))
-    LOG.info('DO_WAIT Got Task? context=%s', dumps(dir(_context)))
 
 def split_pdf(event, context):
     """TODO use PyPDF to split the PDF on S3, write pages to S3 page_pdf/uid/jid/0000.pdf.
@@ -84,3 +77,17 @@ def split_pdf(event, context):
     return {'statusCode': 200,
             'headers': {'Access-Control-Allow-Origin': '*'},
             'body': dumps({'msg': 'Not doing anything useful right now'})}
+
+
+if __name__ == '__main__':
+    """Basic local testing."""
+    context = None                # it's really an object
+    event = {'headers': {'content-type': 'application/pdf'}, 'queryStringParameters': {'filename': 'filename.pdf'}}
+    res = get_upload_url(event, context)
+    print(f'TEST OK   get_upload_url: {res}')
+    event = {'headers': {'content-type': 'application/pdf'}, 'queryStringParameters': {'MISSING': 'filename.pdf'}}
+    res = get_upload_url(event, context)
+    print(f'TEST NOFILENAMEL get_upload_url: {res}')
+    event = {'headers': {'content-type': 'BOGUS'}, 'queryStringParameters': {'filename': 'filename.pdf'}}
+    res = get_upload_url(event, context)
+    print(f'TEST BadContentType get_upload_url: {res}')
