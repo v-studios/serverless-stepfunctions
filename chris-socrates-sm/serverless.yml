@@ -25,6 +25,7 @@ provider:
   stage: dev
   #region: ap-southeast-1        # hong
   region: us-east-1             # chris
+  logRetentionInDays: 14
   environment:
     STATEMACHINE_ARN:
       Ref: SocratesChrisStepFunctionsStateMachine
@@ -32,11 +33,6 @@ provider:
     #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
     #BUCKET_NAME: ${self:custom.bucket_name}
     BUCKET_NAME: ${self:service}-${self:provider.stage}-${env:USER}
-    # The Lambda will need this, but can't get it until after statemachine is created?
-    # STATEMACHINE_ARN:
-    #   Fn::GetAtt: [SocratesChrisStepFunctionsStateMachine, Arn]
-    # Example ARNs for previously created SMs:
-    # StateMachine ARN: arn:aws:states:us-east-1:304932368623:stateMachine:CallCenterStepFunctionsStateMachine-UexAbet6E2ow
     # IAM role ARN:     arn:aws:iam::304932368623:role/slssteps-dev-IamRoleStateMachineExecution-1MRICNKT0JZRH
   # SLS creates this by itself:
   # ARN: arn:aws:iam::304932368623:role/socrates2-dev-IamRoleStateMachineExecution-4W2KL6QN2BJI
@@ -69,6 +65,11 @@ provider:
       Resource: 
         - "arn:aws:s3:::${self:service}-${self:provider.stage}-${env:USER}"     # TODO use the custom or environment var
         - "arn:aws:s3:::${self:service}-${self:provider.stage}-${env:USER}/*"   # TODO use the custom or environment var
+    - Effect: Allow
+      Action:
+        - states:StartExecution
+      Resource: 
+        Ref: SocratesChrisStepFunctionsStateMachine
     # - Effect: Allow
     #   Action:
     #   - states:GetActivityTask
@@ -94,6 +95,9 @@ functions:
          rules:
            - prefix: doc_pdf/
            - suffix: .pdf
+  StartStateMachine:
+    description: the upload invokes the statemachine where we do our log it and go to next state
+    handler: handler.start_state_machine
   SplitPdf:
     description: triggered by statemachine bread doc_pdf/jid/name.pdf into pages page_pdf/jid/0000.pdf
     handler: handler.split_pdf
@@ -105,24 +109,22 @@ stepFunctions:
         owner: chris@v-studios.com
       definition:
         Comment: start at upload then drive the lambdas
-        StartAt: Uploaded
+        StartAt: StartStateMachine
         States:
-          Uploaded:
+          StartStateMachine:
             Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-Uploaded"
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-StartStateMachine"
+            Next: SplitPdf
+          SplitPdf:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-StartStateMachine"
+            Next: DeclareVictory
+          # Don't need to wait for Split to finish here since it operates in one lambda
+          # Later will have to wait for all pages to be converted and OCRd
+          DeclareVictory:
+            Type: Pass
             End: true
-          #   Next: SplitPdf
-          # SplitPdf:
-          #   Type: Pass
-          #   End: true
-#           # SplitPdf:
-#           #   Type: Task
-#           #   Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SplitPdf"
-#           #   #Fn::GetAtt: [SplitPdfLambdaFunction, Arn]
-#           #   Next: DeclareVictory
-#           # DeclareVictory:
-#           #   Type: Pass
-#           #   End: true
+
 #   activities:
 #     # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
 #     - WaitForSplit

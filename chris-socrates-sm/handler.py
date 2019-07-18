@@ -10,6 +10,7 @@ import uuid
 import boto3
 
 UPLOAD_BUCKET_NAME = os.environ['BUCKET_NAME']
+STATEMACHINE_ARN = os.environ['STATEMACHINE_ARN']
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger()
@@ -31,7 +32,7 @@ def get_upload_url(event, _context):
         curl -v -H "content-type: application/pdf" --upload-file mydoc.pdf "$urlupload"
     """
     # Later want userid so we can include it in PSURL for tracking
-    LOG.info('Got Task? event=%s', dumps(event))
+    LOG.debug('Got Task? event=%s', dumps(event))
     LOG.debug('Got Task? context=%s', dumps(dir(_context)))
     try:
         filename = event['queryStringParameters']['filename']  # TODO: basename, URLdecode defense
@@ -69,32 +70,38 @@ def get_upload_url(event, _context):
 
 
 def uploaded(event, context):
-    """Handle the S3 ObjectCreated trigger: just record in DB and start the statemachine."""
+    """Handle the S3 ObjectCreated trigger: just start the state machine."""
     LOG.info(f'event: {dumps(event)}')
-
-    STATEMACHINE_ARN = os.environ['STATEMACHINE_ARN']
     LOG.info(f'STATEMACHINE_ARN={STATEMACHINE_ARN}')
     s3rec = event['Records'][0]['s3']  # only the first, but there should only be one for S3
-    LOG.info('s3rec={s3rec}')
     bucket = s3rec['bucket']['name']
     key = s3rec['object']['key']
     size = s3rec['object']['size']
     etag = s3rec['object']['eTag']
     _doc_pdf, jid, name_pdf = key.split('/')
     LOG.info(f'bucket={bucket} etag={etag} size={size} key={key} jid={jid} name_pdf={name_pdf}')
-    # TODO put info into DB
-    # TODO trigger start of statemachine
-    return {'bucket': bucket, 'key': key, 'etag': etag, 'size': size, 'jid': jid, 'name_pdf': name_pdf}  # to next step
+    sf = boto3.client('stepfunctions')
+    sf_input = dumps({'bucket': bucket, 'key': key, 'etag': etag, 'size': size, 'jid': jid, 'name_pdf': name_pdf})
+    res = sf.start_execution(stateMachineArn=STATEMACHINE_ARN,
+                             name=jid,  # use our JobID as unique SM invocation ID
+                             input=sf_input)  # state needs JSON str input
+    LOG.info(f'sf.start_execurtion res={res}')
+
+
+def start_state_machine(event, context):
+    """Take input from start of statemachine, enter an event in DDB, pass useful bits to next state."""
+    LOG.info(f'event: {dumps(event)}')
+    # TODO enter info into the DB.
+    return {'bucket': event['bucket'], 'key': event['key'], 'jid': event['jid']}
 
 
 def split_pdf(event, context):
     """TODO use PyPDF to split the PDF on S3, write pages to S3 page_pdf/uid/jid/0000.pdf.
 
-    Returns nothing because this is triggered by state machine.
+    Returns someting to the next state machine state, do_ocr_and_wait_for_completion.
     """
     LOG.info('event: {dumps(event)}')
     return {'statusCode': 200,
-            'headers': {'Access-Control-Allow-Origin': '*'},
             'body': dumps({'msg': 'Not doing anything useful right now'})}
 
 
