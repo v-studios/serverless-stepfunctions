@@ -1,0 +1,38 @@
+service: httpmachinechris
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+
+provider:
+  name: aws
+  runtime: python3.6
+  stage: dev
+  region: us-east-1
+
+functions:
+  start:
+    handler: handler.start
+    events: 
+      - http: GET start
+  stop:
+    handler: handler.stop
+
+stepFunctions:
+  stateMachines:
+    httpmachinechris:
+      events:
+        - http: GET start
+      definition:
+        StartAt: start
+        States:
+          start:
+            Type: Task
+            # our name is lower 'start', but SLS names it to start with upper 'Start...'
+            Resource:
+              Fn::GetAtt: [StartLambdaFunction, Arn]
+            Next: stop
+          stop:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [StopLambdaFunction, Arn]
+            End: true

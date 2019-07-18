@@ -18,6 +18,8 @@ LOG.setLevel(logging.INFO)
 S3 = boto3.client('s3')         # Unneeded: config=boto3.session.Config(signature_version='s3v4'))
 
 
+
+
 def start_job(event, _context):
     """Start StateMachine, return presigned URL to PUT file to our S3 bucket with read access.
 
@@ -32,7 +34,8 @@ def start_job(event, _context):
     # Later we will want to require userid and include it in the PSURL so
     # splitter can track it in the DB.
 
-    LOG.debug('event=%s', dumps(event))
+    LOG.info('Got Task? event=%s', dumps(event))
+    LOG.info('Got Task? context=%s', dumps(dir(_context)))
     content_type = event['headers'].get('content-type')  # APIG downcases this
     # TODO use basename and URLencode filename to defend against slashes etc
     filename = event['queryStringParameters'].get('filename')
@@ -67,6 +70,11 @@ def start_job(event, _context):
             'headers': {'Access-Control-Allow-Origin': '*'},
             'body': dumps({'url': url})}
 
+
+def do_wait(event, context):
+    """Can we wait for task token?"""
+    LOG.info('DO_WAIT Got Task? event=%s', dumps(event))
+    LOG.info('DO_WAIT Got Task? context=%s', dumps(dir(_context)))
 
 def split_pdf(event, context):
     """TODO use PyPDF to split the PDF on S3, write pages to S3 page_pdf/uid/jid/0000.pdf.

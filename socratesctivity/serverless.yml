@@ -73,13 +73,14 @@ functions:
     environment:
       STATEMACHINE_ARN: arn:aws:states:us-east-1:304932368623:stateMachine:SocratesStepFunctionsStateMachine-UcbRKR1Bj4ON
       #   Fn::GetAtt: [SocratesStepFunctionsStateMachine, Arn]
-
-
     events:
     - http:
         path: startjob
         method: GET
         cors: true
+  DoWait:
+    description: TEST statemachine wait
+    handler: handler.do_upload
   SplitPdf:
     description: Split uploaded PDF file
     handler: handler.split_pdf
@@ -91,28 +92,65 @@ functions:
          #bucket: ${self:environment:BUCKET_NAME}
          event: s3:ObjectCreated:*
          # TODO: restrict to /doc_pdfs/*.pdf pattern
+  TestStart:
+    handler: testing.test_start
+    events:
+    - http: GET teststart
 
 stepFunctions:
   stateMachines:
+    TestHttpStart:
+      events:
+        - http:
+            path: teststart
+            method: GET
+      definition:
+        StartAt: TestStart
+        States:
+          TestStart:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-TestStart"
+            End: true
+
     Socrates:
+      # Start the statemachine when the user requests an upload url
+      events:
+        - http:
+            path: startjob
+            method: GET
+            cors: true
       definition:
         StartAt: StartJob
         States:
           StartJob:
             Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-StartJobf"
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-StartJob"
             #Fn::GetAtt: [StartJobLambdaFunction, Arn]
-            Next: WaitForUpload
-          WaitForUpload:
-            # TODO: How do we Fail if we time out waiting for upload?
-            # TODO: How do we timeout after 24 hours?
+            # Parameters:
+            #   - SomeParam: SomeValue
+            #   - token.$: "$$.Task.Token"
+            #Next: WaitForUpload
+            Next: WaitForUploadLambda
+          # Maybe a waitforupload lambda invoked like :...lambda:funcname.waitForTaskToken
+          WaitForUploadLambda:
             Type: Task
-            # Should this be a Wait + Seconds then a task?
-            TimeoutSeconds: 86400      # 24 hours (default=99999999)
-            Resource:  "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForUpload"
-            #           arn:aws:states:us-east-1:304932368623:activity:WaitForUpload
-            #Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
+            Resource: arn:aws:states:::lambda:dowait.waitForTaskToken
+            Parameters:
+              #FunctionName: SOMEFUNC
+              Payload:
+                #- model.$: "$.new_model" # wtf is this?
+                - "token.$": "$$.Task.Token"
             Next: SplitPdf
+          # WaitForUpload:
+          #   # TODO: How do we Fail if we time out waiting for upload?
+          #   # TODO: How do we timeout after 24 hours?
+          #   Type: Task
+          #   # Should this be a Wait + Seconds then a task?
+          #   TimeoutSeconds: 86400      # 24 hours (default=99999999)
+          #   Resource:  "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForUpload"
+          #   #           arn:aws:states:us-east-1:304932368623:activity:WaitForUpload
+          #   #Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
+          #   Next: SplitPdf
           SplitPdf:
             Type: Task
             Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SplitPdf"
