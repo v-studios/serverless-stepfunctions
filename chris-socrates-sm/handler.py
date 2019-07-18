@@ -69,6 +69,22 @@ def get_upload_url(event, _context):
             'body': dumps({'url': url})}
 
 
+def uploaded(event, context):
+    """Handle the S3 ObjectCreated trigger: just record in DB and start the statemachine."""
+    LOG.info(f'event: {dumps(event)}')
+    s3rec = event['Records'][0]['s3']  # only the first, but there should only be one for S3
+    LOG.info('s3rec={s3rec}')
+    bucket = s3rec['bucket']['name']
+    key = s3rec['object']['key']
+    size = s3rec['object']['size']
+    etag = s3rec['object']['eTag']
+    _doc_pdf, jid, name_pdf = key.split('/')
+    LOG.info(f'bucket={bucket} etag={etag} size={size} key={key} jid={jid} name_pdf={name_pdf}')
+    # TODO put info into DB
+    # TODO trigger start of statemachine
+    return {'bucket': bucket, 'key': key, 'etag': etag, 'size': size, 'jid': jid, 'name_pdf': name_pdf}  # to next step
+
+
 def split_pdf(event, context):
     """TODO use PyPDF to split the PDF on S3, write pages to S3 page_pdf/uid/jid/0000.pdf.
 
@@ -79,15 +95,3 @@ def split_pdf(event, context):
             'body': dumps({'msg': 'Not doing anything useful right now'})}
 
 
-if __name__ == '__main__':
-    """Basic local testing."""
-    context = None                # it's really an object
-    event = {'headers': {'content-type': 'application/pdf'}, 'queryStringParameters': {'filename': 'filename.pdf'}}
-    res = get_upload_url(event, context)
-    print(f'TEST OK   get_upload_url: {res}')
-    event = {'headers': {'content-type': 'application/pdf'}, 'queryStringParameters': {'MISSING': 'filename.pdf'}}
-    res = get_upload_url(event, context)
-    print(f'TEST NOFILENAMEL get_upload_url: {res}')
-    event = {'headers': {'content-type': 'BOGUS'}, 'queryStringParameters': {'filename': 'filename.pdf'}}
-    res = get_upload_url(event, context)
-    print(f'TEST BadContentType get_upload_url: {res}')
