@@ -140,21 +140,22 @@ def ocr_page(event, context):
     TODO: Instead of Activity, can we include somehow get a Task Token and send it to a state that's .waitForTaskToken?
     See Callback Pattern at https://console.aws.amazon.com/states/home?region=us-east-1#/sampleProjects
     """
-    LOG.info(f'event: {dumps(event)}')
+    LOG.debug(f'event: {dumps(event)}')
     ACTIVITY_OCR_DONE_ARN = os.environ['ACTIVITY_OCR_DONE_ARN']
-    LOG.info(f'ACTIVIVITY_OCR_DONE_ARN={ACTIVITY_OCR_DONE_ARN}')
+    LOG.info(f'ACTIVITY_OCR_DONE_ARN={ACTIVITY_OCR_DONE_ARN}')
     s3rec = event['Records'][0]['s3']  # only the first, but there should only be one for S3
     bucket = s3rec['bucket']['name']
     key = s3rec['object']['key']
-    _doc_pdf, jid, name_pdf = key.split('/')
-    LOG.info(f'bucket={bucket} etag={etag} size={size} key={key} jid={jid} name_pdf={name_pdf}')
+    _page_pdf, jid, name_pdf = key.split('/')
+    LOG.info(f'bucket={bucket} key={key} jid={jid} name_pdf={name_pdf}')
 
     worker_name = "notify_upload_worker"
     sf = boto3.client('stepfunctions')
     # Pretend we've discovered we've finished all the pages
     if name_pdf == '0000.pdf':
-        res = sf.get_activity_task(activityArn=ACTIVITY_OCR_DONE_ARN, workerName='TODO_WTF')
+        # This does a long poll and times out after 60 seconds, so not ideal
+        res = sf.get_activity_task(activityArn=ACTIVITY_OCR_DONE_ARN, workerName='OCR_PAGE')  # arbitrary name
         LOG.info(f'sf_activity={res}')
-        sf_input = dumps(res['input'])
-        res = client.send_task_success(taskToken=res['taskToken'], output=sf_input)
+        sf_input = res['input']  # just copy input to output for now
+        res = sf.send_task_success(taskToken=res['taskToken'], output=sf_input)
         LOG.info(f'sf.send_task_success={res}')

@@ -40,6 +40,8 @@ provider:
   environment:
     STATEMACHINE_ARN:
       Ref: SocratesChrisStepFunctionsStateMachine
+    ACTIVITY_OCR_DONE_ARN: #      "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
+      Ref: WaitForOcrStepFunctionsActivity
     ACTIVITY_ARN: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForUpload"
     #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
     #BUCKET_NAME: ${self:custom.bucket_name}
@@ -125,8 +127,7 @@ stepFunctions:
             # when lambda detects all done, it has to send a signal to release this wait state.
             Type: Task
             Resource: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
-            # Type:  ### can I use a simple ref?
-            #   Ref: WaitForOcrStepFunctionsActivity
+               #Ref: WaitForOcrStepFunctionsActivity   #Can I do someting like this?
             Next: DeclareVictory
           DeclareVictory:
             Type: Pass
