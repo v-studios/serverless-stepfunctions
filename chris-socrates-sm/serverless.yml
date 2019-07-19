@@ -60,14 +60,14 @@ provider:
         - states:StartExecution
       Resource: 
         Ref: SocratesChrisStepFunctionsStateMachine
-    # - Effect: Allow
-    #   Action:
-    #   - states:GetActivityTask
-    #   - states:SendTaskSuccess
-    #   - states:SendTaskFailure
-    #   - states:SendTaskHeartbeat
-    #   Resource: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForUpload"
-    #   #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
+    - Effect: Allow
+      Action:
+      - states:GetActivityTask
+      - states:SendTaskFailure
+      - states:SendTaskHeartbeat # what is this for?
+      - states:SendTaskSuccess
+      Resource: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
+      #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
 
 functions:
   GetUploadUrl:
@@ -91,6 +91,16 @@ functions:
   SplitPdf:
     description: triggered by statemachine bread doc_pdf/jid/name.pdf into pages page_pdf/jid/0000.pdf
     handler: handler.split_pdf
+  OcrPage:
+    description: convert PDF to TIF/PNG and run Tesseract to output text to page_txt/jid/0000.txt and check for all-done
+    handler: handler.ocr_page
+    events:
+     - s3:
+         bucket: ${self:service}-${self:provider.stage}-${env:USER}   # TODO use the custom or environment var
+         event: s3:ObjectCreated:*
+         rules:
+           - prefix: page_pdf/
+           - suffix: .pdf
 
 stepFunctions:
   stateMachines:
@@ -108,14 +118,21 @@ stepFunctions:
           SplitPdf:
             Type: Task
             Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SplitPdf"
+            Next: WaitForOcr
+          WaitForOcr:
+            # All pages process lambdas run in parallel and each should detect when all pages are finished
+            # (I plan to use some clever DynamoDB atomic updates to do this);
+            # when lambda detects all done, it has to send a signal to release this wait state.
+            Type: Task
+            Resource: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
+            # Type:  ### can I use a simple ref?
+            #   Ref: WaitForOcrStepFunctionsActivity
             Next: DeclareVictory
-          # Don't need to wait for Split to finish here since it operates in one lambda
-          # Later will have to wait for all pages to be converted and OCRd
           DeclareVictory:
             Type: Pass
             End: true
 
-#   activities:
-#     # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
-#     - WaitForSplit
+  activities:
+    # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
+    - WaitForOcr
 

@@ -127,3 +127,34 @@ def split_pdf(event, context):
     return {'jid': jid, 'num_pages': num_pages}
 
 
+def ocr_page(event, context):
+    """Get PDF page from S3, convert to image and tesseract txt to page_txt/jid/0000.txt.
+    After saving each page, we need to check whether all the pages are done
+    by inserting the page into DynamoDB atomically and getting the list of done pages back
+    and seeing if all are there. When done, send a notification to the WaitForOcr state
+    to release it.
+
+    Start development TESTING here, don't bother converting or OCRing, or even using DDB yet:
+    just signal when we see page 0000.pdf to get the workflow going.
+
+    TODO: Instead of Activity, can we include somehow get a Task Token and send it to a state that's .waitForTaskToken?
+    See Callback Pattern at https://console.aws.amazon.com/states/home?region=us-east-1#/sampleProjects
+    """
+    LOG.info(f'event: {dumps(event)}')
+    ACTIVITY_OCR_DONE_ARN = os.environ['ACTIVITY_OCR_DONE_ARN']
+    LOG.info(f'ACTIVIVITY_OCR_DONE_ARN={ACTIVITY_OCR_DONE_ARN}')
+    s3rec = event['Records'][0]['s3']  # only the first, but there should only be one for S3
+    bucket = s3rec['bucket']['name']
+    key = s3rec['object']['key']
+    _doc_pdf, jid, name_pdf = key.split('/')
+    LOG.info(f'bucket={bucket} etag={etag} size={size} key={key} jid={jid} name_pdf={name_pdf}')
+
+    worker_name = "notify_upload_worker"
+    sf = boto3.client('stepfunctions')
+    # Pretend we've discovered we've finished all the pages
+    if name_pdf == '0000.pdf':
+        res = sf.get_activity_task(activityArn=ACTIVITY_OCR_DONE_ARN, workerName='TODO_WTF')
+        LOG.info(f'sf_activity={res}')
+        sf_input = dumps(res['input'])
+        res = client.send_task_success(taskToken=res['taskToken'], output=sf_input)
+        LOG.info(f'sf.send_task_success={res}')
