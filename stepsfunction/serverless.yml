@@ -1,0 +1,159 @@
+service: stepFunctionsTest
+
+plugins:
+  - serverless-python-requirements
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+
+package:
+  exclude:
+    - node_modules/**
+    - venv/**
+    - .venv*/**
+    - README.md
+    - package.json
+    - package-lock.json
+    - .git/**
+
+provider:
+  name: aws
+  runtime: python3.6
+  environment:
+    STATEMACHINE_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:MVPStepFunction" ] ]  }
+    ACTIVITY_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcr" ] ]  }
+    REGION: ${self:provider.region}
+    PDFUPLOAD_TABLE: PDFUpload-${self:provider.stage}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - states:GetActivityTask
+        - states:SendTaskSuccess
+        - states:SendTaskFailure
+        - states:SendTaskHeartbeat
+      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcr" ] ]  }
+    - Effect: Allow
+      Action:
+        - states:StartExecution
+      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:MVPStepFunction" ] ]  }
+    - Effect: Allow
+      Action:
+        - s3:DeleteObject
+        - s3:GetObject
+        - s3:PutObject
+        - s3:ListBucket
+      Resource:
+        - Fn::Join:
+          - ''
+          - - 'arn:'
+            - Ref: AWS::Partition
+            - ':s3:::doc-pdfs'
+        - Fn::Join:
+          - ''
+          - - 'arn:'
+            - Ref: AWS::Partition
+            - ':s3:::doc-pdfs/*'
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+        - dynamodb:DescribeTable
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.PDFUPLOAD_TABLE}"
+
+
+
+# you can overwrite defaults here
+  stage: dev
+  region: ap-southeast-1
+
+functions:
+  SplitPdf:
+    handler: handler.split_doc_pdf
+  GetUploadUrl:
+    handler: handler.get_upload_url
+    events:
+      - http:
+          path: get_upload_url
+          method: GET
+          cors: true
+  Uploaded:
+      description: on S3 upload event, add some info to DB, start the state machine
+      handler: handler.uploaded
+      events:
+       - s3:
+           bucket: doc-pdfs  # TODO use the custom or environment var
+           event: s3:ObjectCreated:*
+           rules:
+             - prefix: doc_pdf/
+             - suffix: .pdf
+  StartStateMachine:
+    description: the upload invokes the statemachine where we do our log it and go to next state
+    handler: handler.start_state_machine
+  OcrPage:
+    description: convert PDF to TIF/PNG and run Tesseract to output text to page_txt/jid/0000.txt and check for all-done
+    handler: handler.ocr_page
+    events:
+     - s3:
+         bucket: doc-pdfs   # TODO use the custom or environment var
+         event: s3:ObjectCreated:*
+         rules:
+           - prefix: page_pdf/
+           - suffix: .pdf
+
+stepFunctions:
+  stateMachines:
+    MVPstepfunc:
+      name: MVPStepFunction
+      definition:
+        Comment: start at upload then drive the lambdas
+        StartAt: StartStateMachine
+        States:
+          StartStateMachine:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [StartStateMachineLambdaFunction, Arn]
+            Next: SplitPdf
+          SplitPdf:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [SplitPdfLambdaFunction, Arn]
+            Next: WaitForOcr
+          WaitForOcr:
+            # All pages process lambdas run in parallel and each should detect when all pages are finished
+            # (I plan to use some clever DynamoDB atomic updates to do this);
+            # when lambda detects all done, it has to send a signal to release this wait state.
+            Type: Task
+            Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcr" ] ]  }
+            TimeoutSeconds: 300
+            HeartbeatSeconds: 60
+            # Type:  ### can I use a simple ref?
+            #   Ref: WaitForOcrStepFunctionsActivity
+            Next: DeclareVictory
+          DeclareVictory:
+            Type: Pass
+            End: true
+  activities:
+    # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
+    - WaitForOcr
+
+resources:
+  Resources:
+    PDFUploadDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          - 
+            AttributeName: uuid
+            AttributeType: S
+        KeySchema:
+          - 
+            AttributeName: uuid
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        TableName: ${self:provider.environment.PDFUPLOAD_TABLE}
