@@ -1,0 +1,39 @@
+service: chriscallback
+#app: your-app-name
+#tenant: your-tenant-name
+
+provider:
+  name: aws
+  runtime: python3.7
+
+  stage: dev
+  region: us-east-1
+
+stepFunctions:
+  stateMachines:
+    ChrisCallback:
+      definition:
+        StartAt: StartTaskAndWaitForCallback
+        States:
+          StartTaskAndWaitForCallback:
+            # Should sleep for 4 seconds then issue a success or failure code
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-WaitForCallback"
+            input:
+              TaskToken.$: $$.Task.Token
+          NotifySuccess:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySuccess"
+            End: true
+          NotifyFailure:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyFailure"
+            End: true
+
+functions:
+  StartTaskAndWaitForCallback:
+    handler: handler.start_task_and_wait_for_callback
+  NotifySuccess:
+    handler: handler.notify_success
+  NotifyFailure:
+    handler: handler.notify_failure
