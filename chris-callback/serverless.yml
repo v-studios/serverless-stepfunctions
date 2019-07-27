@@ -5,9 +5,13 @@ service: chriscallback
 provider:
   name: aws
   runtime: python3.7
-
   stage: dev
   region: us-east-1
+  logRetentionInDays: 14
+
+plugins:
+  - serverless-pseudo-parameters
+  - serverless-step-functions
 
 stepFunctions:
   stateMachines:
@@ -16,19 +20,26 @@ stepFunctions:
         StartAt: StartTaskAndWaitForCallback
         States:
           StartTaskAndWaitForCallback:
-            # Should sleep for 4 seconds then issue a success or failure code
+            # Do something like sleep for 4 secs, issue a success or failure code
+            # NOTE: no Next here to get to Success so the Lambda must be running.
+            # BUG: this didn't create a step function
             Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-WaitForCallback"
-            input:
-              TaskToken.$: $$.Task.Token
+            #Function not found:
+            #          arn:aws:lambda:us-east-1:304932368623:function:chriscallback-dev-WaitForCallback 
+            # Console  arn:aws:lambda:us-east-1:304932368623:function:chriscallback-dev-StartTaskAndWaitForCallback
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-StartTaskAndWaitForCallback"
+            Next: NotifySuccess
+            # Invalid
+            # input:
+            #   TaskToken.$: $$.Task.Token
           NotifySuccess:
             Type: Task
             Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySuccess"
             End: true
-          NotifyFailure:
-            Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyFailure"
-            End: true
+          # NotifyFailure:
+          #   Type: Task
+          #   Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyFailure"
+          #   End: true
 
 functions:
   StartTaskAndWaitForCallback:
