@@ -6,19 +6,15 @@ import boto3
 def start_task_and_wait_for_callback(event, context):
     print(f'startwait: event={event}')
     sfn = boto3.client('stepfunctions')
-    for record in event['Records']:
-        message_body = json.loads(record['body'])
-        task_token = message_body['TaskToken']
-        params = {'output': 'Callback task completed successfully',
-                  'taskToken': task_token}
-
-        print(f'Calling Step Functions to complete callback with {params}')
-        # output is the JSON output of the task as a str
-        res = sfn.send_task_success(taskToken=task_token,
-                                    output=json.dumps({'msg': 'WHATEVER'}))
-        print(f'sendTaskSuccess res={res}')
-        # send_task_failure(taskToken=..., error='...', cause='...')
-
+    task_token = event['taskToken']
+    print(f'task_token={task_token}')
+    # Here we would do something useful, then continue the statemachine
+    print(f'sending success...')
+    res = sfn.send_task_success(taskToken=task_token,
+                                output=json.dumps({'msg': 'WHATEVER DUDE'}))
+    print(f'sendTaskSuccess res={res}')
+    # send_task_failure(taskToken=..., error='...', cause='...')
+    return {'msg': 'does this really get sent anywhere?'}
 
 # def notify_success(event, context):
 #     print(f'success: event={event}')

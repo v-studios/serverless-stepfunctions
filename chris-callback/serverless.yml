@@ -1,6 +1,8 @@
 service: chriscallback
-#app: your-app-name
-#tenant: your-tenant-name
+
+plugins:
+  - serverless-pseudo-parameters
+  - serverless-step-functions
 
 provider:
   name: aws
@@ -8,10 +10,28 @@ provider:
   stage: dev
   region: us-east-1
   logRetentionInDays: 14
+  iamRoleStatements:
+    # Allow the lamba(s) to trigger the statemachine.
+    # This seems to be applying to Lambda but not some STS thing?
+    # (AccessDeniedException) when calling the SendTaskSuccess operation: User: 
+    # arn:aws:sts::304932368623:assumed-role/chriscallback-dev-us-east-1-lambdaRole/chriscallback-dev-StartTaskAndWaitForCallback
+    # is not authorized to perform: states:SendTaskSuccess
+    # on resource: arn:aws:states:us-east-1:304932368623:stateMachine:ChrisCallbackStepFunctionsStateMachine-Esf4lC8jq7c9",
+    - Effect: Allow
+      Action:
+      - states:SendTaskFailure
+      - states:SendTaskSuccess
+      #- states:GetActivityTask
+      #- states:SendTaskHeartbeat # what is this for?
+      Resource: 
+      - "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:states:SendTaskSuccess"
+      - "*"                     # DANGER DANGER DANGER: tighten this to just the STS? 
 
-plugins:
-  - serverless-pseudo-parameters
-  - serverless-step-functions
+      #Ref: WaitForOcrStepFunctionsActivity   #Can I do someting like this?
+
+      #Resource: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
+      #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
+
 
 stepFunctions:
   stateMachines:
@@ -22,20 +42,22 @@ stepFunctions:
           StartTaskAndWaitForCallback:
             # Do something like sleep for 4 secs, issue a success or failure code
             # NOTE: no Next here to get to Success so the Lambda must be running.
-            # BUG: this didn't create a step function
             Type: Task
-            #Function not found:
-            #          arn:aws:lambda:us-east-1:304932368623:function:chriscallback-dev-WaitForCallback 
-            # Console  arn:aws:lambda:us-east-1:304932368623:function:chriscallback-dev-StartTaskAndWaitForCallback
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-StartTaskAndWaitForCallback"
-            Next: NotifySuccess
+            Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
+            Parameters:
+              FunctionName: ${self:service}-${opt:stage}-StartTaskAndWaitForCallback
+              Payload:
+                yo: Mama
+                taskToken.$: $$.Task.Token
+            #Next: NotifySuccess
+            End: true
             # Invalid
             # input:
             #   TaskToken.$: $$.Task.Token
-          NotifySuccess:
-            Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySuccess"
-            End: true
+          # NotifySuccess:
+          #   Type: Task
+          #   Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySuccess"
+          #   End: true
           # NotifyFailure:
           #   Type: Task
           #   Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyFailure"
