@@ -17,9 +17,9 @@ def start_task_and_wait_for_callback(event, context):
     # send_task_failure(taskToken=..., error='...', cause='...')
     return {'msg': 'does this really get sent anywhere?'}
 
-# def notify_success(event, context):
-#     print(f'success: event={event}')
-#     return {'msg': 'Looking Good'}
+def notify_success(event, context):
+    print(f'success: event={event}')
+    return {'msg': 'Looking Good'}
 
 
 # def notify_failure(event, context):

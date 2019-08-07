@@ -49,15 +49,15 @@ stepFunctions:
               Payload:
                 yo: Mama
                 taskToken.$: $$.Task.Token
-            #Next: NotifySuccess
-            End: true
+            Next: NotifySuccess
+            #End: true
             # Invalid
             # input:
             #   TaskToken.$: $$.Task.Token
-          # NotifySuccess:
-          #   Type: Task
-          #   Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySuccess"
-          #   End: true
+          NotifySuccess:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySuccess"
+            End: true
           # NotifyFailure:
           #   Type: Task
           #   Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyFailure"
