@@ -50,23 +50,29 @@ stepFunctions:
                 yo: Mama
                 taskToken.$: $$.Task.Token
             Next: NotifySuccess
-            #End: true
-            # Invalid
-            # input:
-            #   TaskToken.$: $$.Task.Token
+            Catch:
+            - ErrorEquals: ["UnluckyError"] # this has to be before TaskFailed?
+              Next: NotifyUnlucky
+            - ErrorEquals: ["States.TaskFailed"]
+              Next: NotifyTaskFailed
           NotifySuccess:
             Type: Task
             Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySuccess"
             End: true
-          # NotifyFailure:
-          #   Type: Task
-          #   Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyFailure"
-          #   End: true
+          NotifyUnlucky:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyUnlucky"
+            End: true           # but still seen as success
+          NotifyTaskFailed:
+            Type: Fail
+            Cause: Unhandled error in code
+            #Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyTaskFailed"
+            #End: 
 
 functions:
   StartTaskAndWaitForCallback:
     handler: handler.start_task_and_wait_for_callback
   NotifySuccess:
     handler: handler.notify_success
-  NotifyFailure:
-    handler: handler.notify_failure
+  NotifyUnlucky:
+    handler: handler.notify_unlucky
