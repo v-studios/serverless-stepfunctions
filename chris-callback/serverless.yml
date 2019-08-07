@@ -11,23 +11,13 @@ provider:
   region: us-east-1
   logRetentionInDays: 14
   iamRoleStatements:
-    # Allow the lamba(s) to trigger the statemachine.
-    # This seems to be applying to Lambda but not some STS thing?
-    # (AccessDeniedException) when calling the SendTaskSuccess operation: User: 
-    # arn:aws:sts::304932368623:assumed-role/chriscallback-dev-us-east-1-lambdaRole/chriscallback-dev-StartTaskAndWaitForCallback
-    # is not authorized to perform: states:SendTaskSuccess
-    # on resource: arn:aws:states:us-east-1:304932368623:stateMachine:ChrisCallbackStepFunctionsStateMachine-Esf4lC8jq7c9",
     - Effect: Allow
       Action:
       - states:SendTaskFailure
       - states:SendTaskSuccess
-      #- states:GetActivityTask
-      #- states:SendTaskHeartbeat # what is this for?
       Resource: 
       - "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:states:SendTaskSuccess"
       - Ref: ChrisCallbackStepFunctionsStateMachine
-
-
 
 stepFunctions:
   stateMachines:
@@ -40,8 +30,6 @@ stepFunctions:
         StartAt: StartTaskAndWaitForCallback
         States:
           StartTaskAndWaitForCallback:
-            # Do something like sleep for 4 secs, issue a success or failure code
-            # NOTE: no Next here to get to Success so the Lambda must be running.
             Type: Task
             Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
             Parameters:
@@ -49,28 +37,28 @@ stepFunctions:
               Payload:
                 yo: Mama
                 taskToken.$: $$.Task.Token
-            Next: NotifySuccess
+            Next: HappyPath
             Catch:
             # Put our named failures before generic TaskFailed
             - ErrorEquals: ["UnluckyError"]
-              Next: NotifyUnlucky
+              Next: Unlucky
             - ErrorEquals: ["SadPath"]
-              Next: NotifySadPath
+              Next: SadPath
             - ErrorEquals: ["States.TaskFailed"]
-              Next: NotifyTaskFailed
-          NotifySuccess:
+              Next: TaskFailed
+          HappyPath:
             Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySuccess"
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-HappyPath"
             End: true
-          NotifyUnlucky:
+          SadPath:
             Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyUnlucky"
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SadPath"
             End: true           # treated as success, but could Next to a Fail state
-          NotifySadPath:
+          Unlucky:
             Type: Task
-            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySadPath"
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-Unlucky"
             End: true           # treated as success, but could Next to a Fail state
-          NotifyTaskFailed:
+          TaskFailed:
             # Cause and Error are optional
             Type: Fail
             Error: You have an unhandled error in your code
@@ -79,9 +67,9 @@ stepFunctions:
 functions:
   StartTaskAndWaitForCallback:
     handler: handler.start_task_and_wait_for_callback
-  NotifySuccess:
-    handler: handler.notify_success
-  NotifyUnlucky:
-    handler: handler.notify_unlucky
-  NotifySadPath:
-    handler: handler.notify_sad_path
+  HappyPath:
+    handler: handler.happy_path
+  Unlucky:
+    handler: handler.unlucky
+  SadPath:
+    handler: handler.sad_path

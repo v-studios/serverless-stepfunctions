@@ -20,35 +20,35 @@ def start_task_and_wait_for_callback(event, context):
         res = sfn.send_task_success(taskToken=task_token,
                                     output=json.dumps({'msg': 'WHATEVER DUDE',
                                                        'chance': chance,
-                                                       'taskToken': task_token}))
+                                                       'token': task_token}))
         print(f'sendTaskSuccess res={res}')
     elif chance > 0.50:
         print(f'sending failure: error and cause go to next step input')
         res = sfn.send_task_failure(taskToken=task_token,
                                     error='UnluckyError',
-                                    cause=f'You were unlucky, chance={chance}')
+                                    cause=f'You were unlucky {chance}')
         print(f'sendTaskFailure res={res}')
     elif chance > 0.25:
         print(f'sending failure: error and cause go to next step input')
         res = sfn.send_task_failure(taskToken=task_token,
                                     error='SadPath',
-                                    cause=f'This is not the happy path, chance={chance}')
+                                    cause=f'Not the happy path {chance}')
         print(f'sendTaskFailure res={res}')
     else:
-        raise RuntimeError(f'Simulated unhandled logic error chance={chance}')
+        raise RuntimeError(f'Simulated unhandled logic error {chance}')
     return {'msg': 'This does not get sent anywhere!'}
 
 
-def notify_success(event, context):
-    print(f'success: event={event}')
+def happy_path(event, context):
+    print(f'happy_path: event={event}')
     return {'msg': 'Looking Good'}
 
 
-def notify_unlucky(event, contect):
-    print(f'unlucky: event={event}')
-    return {'msg': f'Your state machine was unlucky today event={event}'}
-
-
-def notify_sad_path(event, contect):
+def sad_path(event, contect):
     print(f'sad_path: event={event}')
     return {'msg': f'Sorry, this was not the happy path event={event}'}
+
+
+def unlucky(event, contect):
+    print(f'unlucky: event={event}')
+    return {'msg': f'Your state machine was unlucky today event={event}'}
