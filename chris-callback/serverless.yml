@@ -44,6 +44,8 @@ stepFunctions:
               Next: Unlucky
             - ErrorEquals: ["SadPath"]
               Next: SadPath
+            - ErrorEquals: ["CannotRecover"]
+              Next: CannotRecover
             - ErrorEquals: ["States.TaskFailed"]
               Next: TaskFailed
           HappyPath:
@@ -58,8 +60,12 @@ stepFunctions:
             Type: Task
             Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-Unlucky"
             End: true           # treated as success, but could Next to a Fail state
+          # For type FAIL, Error and Cause are optional
+          CannotRecover:
+            Type: Fail
+            Error: Sorry we could not recover from some problem
+            Cause: check the input to this state for the traceback
           TaskFailed:
-            # Cause and Error are optional
             Type: Fail
             Error: You have an unhandled error in your code
             Cause: check the input to this state for the traceback

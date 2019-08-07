@@ -12,31 +12,27 @@ def start_task_and_wait_for_callback(event, context):
     # Here we would do something useful, then continue the statemachine
     # with success or failure depending on outcome of that work;
     # for now, just randomly pick one.
-    # TODO: create a Lambda exception and see how SNF detects it
     chance = random()
-    print(f'chance={chance}')
-    if chance > 0.75:
-        print(f'sending success...')
+    if chance > 0.80:
         res = sfn.send_task_success(taskToken=task_token,
                                     output=json.dumps({'msg': 'WHATEVER DUDE',
                                                        'chance': chance,
                                                        'token': task_token}))
-        print(f'sendTaskSuccess res={res}')
-    elif chance > 0.50:
-        print(f'sending failure: error and cause go to next step input')
+    elif chance > 0.60:
         res = sfn.send_task_failure(taskToken=task_token,
                                     error='UnluckyError',
                                     cause=f'You were unlucky {chance}')
-        print(f'sendTaskFailure res={res}')
-    elif chance > 0.25:
-        print(f'sending failure: error and cause go to next step input')
+    elif chance > 0.40:
         res = sfn.send_task_failure(taskToken=task_token,
                                     error='SadPath',
                                     cause=f'Not the happy path {chance}')
-        print(f'sendTaskFailure res={res}')
+    elif chance > 0.20:
+        res = sfn.send_task_failure(taskToken=task_token,
+                                    error='CannotRecover',
+                                    cause=f'We coud not recover {chance}')
     else:
         raise RuntimeError(f'Simulated unhandled logic error {chance}')
-    return {'msg': 'This does not get sent anywhere!'}
+    # return {'msg': 'This does not get sent anywhere!'}
 
 
 def happy_path(event, context):
