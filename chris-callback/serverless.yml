@@ -25,11 +25,8 @@ provider:
       #- states:SendTaskHeartbeat # what is this for?
       Resource: 
       - "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:states:SendTaskSuccess"
-      - "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:stateMachine:ChrisCallbackStepFunctionsStateMachine-Esf4lC8jq7c9"
-      #- "*"                     # DANGER DANGER DANGER: tighten this to just the STS? 
-      #Ref: WaitForOcrStepFunctionsActivity   #Can I do someting like this?
-      #Resource: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
-      #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
+      - Ref: ChrisCallbackStepFunctionsStateMachine
+
 
 
 stepFunctions:
