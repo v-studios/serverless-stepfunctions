@@ -15,12 +15,18 @@ package:
     - package-lock.json
     - .git/**
 
+custom:
+  pythonRequirements:
+    noDeploy: []
+
 provider:
   name: aws
   runtime: python3.6
   environment:
-    STATEMACHINE_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:MVPStepFunction" ] ]  }
-    ACTIVITY_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcr" ] ]  }
+    STATEMACHINE_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:firstSteps" ] ]  }
+    ACTIVITY_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcrPage" ] ]  }
+    ACTIVITY_OCR_DONE_ARN: #      "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcrPage"
+      Ref: WaitForOcrPageStepFunctionsActivity
     REGION: ${self:provider.region}
     PDFUPLOAD_TABLE: PDFUpload-${self:provider.stage}
   iamRoleStatements:
@@ -30,11 +36,11 @@ provider:
         - states:SendTaskSuccess
         - states:SendTaskFailure
         - states:SendTaskHeartbeat
-      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcr" ] ]  }
+      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcrPage" ] ]  }
     - Effect: Allow
       Action:
         - states:StartExecution
-      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:MVPStepFunction" ] ]  }
+      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:firstSteps" ] ]  }
     - Effect: Allow
       Action:
         - s3:DeleteObject
@@ -62,8 +68,14 @@ provider:
         - dynamodb:DeleteItem
         - dynamodb:DescribeTable
       Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.PDFUPLOAD_TABLE}"
-
-
+    # - Effect: Allow
+    #   Action:
+    #     - SNS:Publish
+    #   Resource: { "Fn::Join" : [":", ["arn:aws:sns:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "NotifyOCRTopic" ] ]  }
+    - Effect: Allow
+      Action:
+        - textract:DetectDocumentText
+      Resource: "*"
 
 # you can overwrite defaults here
   stage: dev
@@ -79,6 +91,12 @@ functions:
           path: get_upload_url
           method: GET
           cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId:
+              Ref: ApiGatewayAuthorizer
+
+
   Uploaded:
       description: on S3 upload event, add some info to DB, start the state machine
       handler: handler.uploaded
@@ -89,6 +107,7 @@ functions:
            rules:
              - prefix: doc_pdf/
              - suffix: .pdf
+      timeout: 20
   StartStateMachine:
     description: the upload invokes the statemachine where we do our log it and go to next state
     handler: handler.start_state_machine
@@ -102,11 +121,18 @@ functions:
          rules:
            - prefix: page_pdf/
            - suffix: .pdf
+    timeout: 20
+  # InformUser:
+  #     handler: handler.inform_user
+  #     events:
+  #       - sns: NotifyOCRTopic
+  #     environment:
+  #       SNS_TOPIC_ARN: { "Fn::Join" : [":", ["arn:aws:sns:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "NotifyOCRTopic" ] ]  }
 
 stepFunctions:
   stateMachines:
-    MVPstepfunc:
-      name: MVPStepFunction
+    MvpStepfunc:
+      name: firstSteps
       definition:
         Comment: start at upload then drive the lambdas
         StartAt: StartStateMachine
@@ -126,7 +152,7 @@ stepFunctions:
             # (I plan to use some clever DynamoDB atomic updates to do this);
             # when lambda detects all done, it has to send a signal to release this wait state.
             Type: Task
-            Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcr" ] ]  }
+            Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcrPage" ] ]  }
             TimeoutSeconds: 300
             HeartbeatSeconds: 60
             # Type:  ### can I use a simple ref?
@@ -137,7 +163,7 @@ stepFunctions:
             End: true
   activities:
     # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
-    - WaitForOcr
+    - WaitForOcrPage
 
 resources:
   Resources:
@@ -157,3 +183,19 @@ resources:
           ReadCapacityUnits: 5
           WriteCapacityUnits: 5
         TableName: ${self:provider.environment.PDFUPLOAD_TABLE}
+    ApiGatewayAuthorizer:
+      DependsOn:
+        - ApiGatewayRestApi
+      Type: AWS::ApiGateway::Authorizer
+      Properties:
+        Name: cognito-authorizer
+        IdentitySource: method.request.header.Authorization
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        Type: COGNITO_USER_POOLS
+        ProviderARNs: ["arn:aws:cognito-idp:ap-southeast-1:330477736997:userpool/ap-southeast-1_f0HFc28wf"]
+    # NotifyOCRTopic:
+    #     Type: AWS::SNS::Topic
+    #     Properties:
+    #     DisplayName: 'Inform to the user if the OCR finished'
+    #     TopicName: NotifyOCRTopic

@@ -1,2 +1,4 @@
 PyPDF2==1.26.0
-pynamodb==3.2.1
+pynamodb==3.3.3
+boto3==1.9.200
+botocore==1.12.201

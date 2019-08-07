@@ -1,23 +1,29 @@
 """Simple example."""
 from json import dumps, loads
 import io
-
+import sys
 import boto3
+import botocore
+from botocore.exceptions import ClientError
 import logging
 import os
-from models import PDFUpload
+from models import PDFUpload, SinglePage
 from uuid import uuid4
 from datetime import datetime
 from PyPDF2 import PdfFileReader, PdfFileWriter
-import boto3
 UPLOAD_BUCKET_NAME = "doc-pdfs"
 STATEMACHINE_ARN = os.environ.get('STATEMACHINE_ARN', "")
 
+STARTMARK = b"\xff\xd8"
+STARTFIX = 0
+ENDMARK = b"\xff\xd9"
+ENDFIX = 2
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger()
 LOG.setLevel(logging.INFO)
 S3 = boto3.client('s3')  # Unneeded: config=boto3.session.Config(signature_version='s3v4'))
+s3 = None
 
 
 def get_upload_url(event, _context):
@@ -104,6 +110,14 @@ def split_doc_pdf(event, context):
         out.seek(0)
         S3.upload_fileobj(out, bucket, pdf_key)
         LOG.info(f'uploaded page_num={page_num}')
+    pdf_upload = PDFUpload.get(hash_key=jid)
+    # update PDFUpload
+    pdf_upload.update_with_log(
+        actions=[
+            PDFUpload.status.set("split"),
+            PDFUpload.num_pages.set(num_pages),
+            PDFUpload.updatedAt.set(datetime.now())
+        ])
     return {'jid': jid, 'num_pages': num_pages}
 
 
@@ -125,7 +139,7 @@ def uploaded(event, context):
     uid = uuid4().hex
     file_info = save_info(name_pdf, jid)
     res = sf.start_execution(stateMachineArn=STATEMACHINE_ARN,
-                             name=f'{jid}-{uid}',  # use our JobID as unique SM invocation ID
+                             name=f'{jid}',  # use our JobID as unique SM invocation ID
                              input=sf_input)  # state needs JSON str input
     LOG.info(f'sf.start_execurtion res={res}')
 
@@ -142,7 +156,8 @@ def save_info(desired_filename, jid):
     file_upload = PDFUpload(
         desired_filename=desired_filename,
         uuid=jid,
-        state=0,
+        status="uploaded",
+        pages=[],
         filename='',
         createdAt=datetime.now()
     )
@@ -163,19 +178,186 @@ def ocr_page(event, context):
     See Callback Pattern at https://console.aws.amazon.com/states/home?region=us-east-1#/sampleProjects
     """
     LOG.info(f'event: {dumps(event)}')
-    activity_arn = os.environ.get('ACTIVITY_ARN', "")
+    LOG.info(f'boto3 version: {boto3.__version__} botocore version: {botocore.__version__}')
+
     s3rec = event['Records'][0]['s3']  # only the first, but there should only be one for S3
     bucket = s3rec['bucket']['name']
     key = s3rec['object']['key']
     _doc_pdf, jid, name_pdf = key.split('/')
     LOG.info(f'bucket={bucket} key={key} jid={jid} name_pdf={name_pdf}')
 
-    worker_name = "notify_upload_worker"
-    sf = boto3.client('stepfunctions')
+    detected_text = get_textract_data(bucket, key)
+    write_textract_to_s3(detected_text, bucket, key)
+    pdf_upload = PDFUpload.get(hash_key=jid)
+    update_db_after_ocr(pdf_upload, detected_text, name_pdf, jid)
+
     # Pretend we've discovered we've finished all the pages
-    if name_pdf == '0000.pdf':
-        res = sf.get_activity_task(activityArn=activity_arn, workerName=worker_name)
-        LOG.info(f'sf_activity={res}')
-        sf_input = dumps(res['input'])
-        res = sf.send_task_success(taskToken=res['taskToken'], output=sf_input)
+    if check_orc_done(pdf_upload, jid):
+        # update db
+        pdf_upload.update_with_log(
+            actions=[
+                PDFUpload.status.set("ocred"),
+                PDFUpload.updatedAt.set(datetime.now())
+            ])
+        send_task_ocr_activity(jid)
+
+
+def get_textract_data(bucket, key):
+    """Using AWS textract."""
+    LOG.info(f'Loading get_textract_data bucket:{bucket}, key:{key}')
+    # convert to jpg
+    jpg_file = extract_jpg_from_pdf(bucket, key)
+    # Call Amazon Textract
+    tx = boto3.client(
+        service_name='textract',
+        region_name='us-east-1',
+        endpoint_url='https://textract.us-east-1.amazonaws.com',
+    )
+    response = tx.detect_document_text(
+        Document={
+            'Bytes': jpg_file
+        })
+    detected_text = ''
+
+    # Print detected text
+    for item in response['Blocks']:
+        if item['BlockType'] == 'LINE':
+            detected_text += item['Text'] + '\n'
+    return detected_text
+
+
+def write_textract_to_s3(textract_data, bucket, key):
+    """Save detected text to S3."""
+    LOG.info(f'Loading write_textract_to_s3 bucket:{bucket}, key:{key}')
+    generate_path = os.path.splitext(key)[0] + '.txt'
+    s3client = boto3.client('s3')
+    s3client.put_object(Body=textract_data, Bucket=bucket, Key=generate_path)
+    LOG.info(f'generateFilePath: {generate_path}')
+
+
+def update_db_after_ocr(pdf_upload, content, name, jid):
+    """Update PDFUpload after finishing orc."""
+    page = SinglePage(
+        page_id=name[:4],
+        content=content
+    )
+    pages = pdf_upload.pages
+    if pages:
+        pages.append(page)
+    else:
+        pages = [page]
+    LOG.info(f'loading update_db_after_ocr pages:{pages}')
+    pdf_upload.update_with_log(
+        actions=[
+            PDFUpload.pages.set(pages),
+            PDFUpload.updatedAt.set(datetime.now())
+        ])
+
+
+def check_orc_done(pdf_upload, jid):
+    """Get db & check done."""
+    LOG.info(f'loading check_orc_done')
+    num_pages = pdf_upload.num_pages
+    pages = pdf_upload.pages
+    pages_len = 0 if not pages else len(pages)
+    LOG.info(f'check_orc_done: num_pages:{num_pages}, pages_len={pages_len}')
+    if num_pages == pages_len:
+        return True
+    else:
+        return False
+
+
+def send_task_ocr_activity(worker_name):
+    """After ocr's done, send task success to WaitOcr activity."""
+    try:
+        activity_arn = os.environ.get('ACTIVITY_OCR_DONE_ARN', "")
+        sf = boto3.client('stepfunctions')
+        response = sf.get_activity_task(
+            activityArn=activity_arn,
+            workerName=worker_name
+        )
+        LOG.info(f'activityArn={activity_arn}, sf_activity={response}')
+        sf_input = dumps(response['input'])
+        res = sf.send_task_success(
+            taskToken=response["taskToken"],
+            output=sf_input
+        )
         LOG.info(f'sf.send_task_success={res}')
+    except ClientError as e:
+        LOG.error(e)
+
+
+def extract_jpg_from_pdf(bucket, key):
+    """Extract JPG from single-page PDF scan, return as bytes.
+
+    No coversion involved so faster than GhostScript or ImageMagick,
+    and also no loss due to conversion.
+    This mutation of Batchelder's work only handles a single page.
+    Only works with scanned PDF images, not text PDFs.
+    May not always be reliable
+    Past peformance is no guarantee of future results.
+    Use only under a doctor's supervision.
+    """
+    LOG.info(f'Loadding extract_jpg_from_pdf: bucket:{bucket}, key={key}')
+    # download from S3
+    download(bucket, key, '/tmp/page.pdf')
+    pdf = open('/tmp/page.pdf', "rb").read()
+    LOG.info('extract_jpg_from_pdf after open file')
+    i = 0
+    while True:
+        istream = pdf.find(b"stream", i)
+        LOG.info('extract_jpg_from_pdf istream {}'.format(istream))
+        if istream < 0:
+            break
+        istart = pdf.find(STARTMARK, istream, istream + 20)
+        LOG.info('extract_jpg_from_pdf istart {}'.format(istart))
+        if istart < 0:
+            i = istream + 20
+            continue
+        iend = pdf.find(b"endstream", istart)
+        LOG.info('extract_jpg_from_pdf iend {}'.format(iend))
+        if iend < 0:
+            raise Exception("Did not find end of stream!")
+        iend = pdf.find(ENDMARK, iend - 20)
+        if iend < 0:
+            raise Exception("Did not find end of JPG!")
+        istart += STARTFIX
+        iend += ENDFIX
+        LOG.info("JPG from %d to %d" % (istart, iend))
+        jpg = pdf[istart:iend]
+        return jpg
+    raise Exception(f"Could not extract JPG from bucket={bucket}, key={key}")
+
+
+def download(bucket_name, key, path):
+    """Safely download an object from S3.
+
+    param str bucket_name: the name of the S3 bucket
+    param str key: the desired object's S3 key
+    param str path: path on the local disk to save the object to
+    return: None
+    """
+    s3 = get_s3_resource()
+    bucket = s3.Bucket(bucket_name)
+    s3_url = 's3://{}/{}'.format(bucket_name, key)
+    LOG.info('downloading {} to {}'.format(s3_url, path))
+    try:
+        bucket.download_file(key, path)
+    except (ClientError, Exception) as e:
+        LOG.error('download({}, {}, $path) e.response={}'.format(
+            bucket_name, key, e.response))
+        raise e
+
+
+def get_s3_resource():
+    """If the global s3 is set, return it; else set it then return.
+
+    This avoids initializing the s3 connection in every function call so is a
+    performance boost. It's perhaps not as good as doing it in each lambda
+    outside the handler, but good enough, and requires no lambda function changes.
+    """
+    global s3
+    if s3 is None:
+        LOG.info('get_s3_resource initializing new connection')
+        s3 = boto3.resource('s3')
+    return s3

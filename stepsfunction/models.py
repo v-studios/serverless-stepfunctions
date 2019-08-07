@@ -4,6 +4,8 @@ import os
 from datetime import datetime
 
 from pynamodb.attributes import (
+    ListAttribute,
+    MapAttribute,
     NumberAttribute,
     UTCDateTimeAttribute,
     UnicodeAttribute
@@ -29,6 +31,13 @@ class MVPDateTime(UTCDateTimeAttribute):
         return super(MVPDateTime, self).deserialize(value)
 
 
+class SinglePage(MapAttribute):
+    """Page."""
+
+    page_id = UnicodeAttribute()
+    content = UnicodeAttribute()
+
+
 class PDFUpload(Model):
     """Mapping to DynamoDB - PDFUpload table."""
 
@@ -44,8 +53,10 @@ class PDFUpload(Model):
             host = 'https://dynamodb.' + region + '.amazonaws.com'
 
     uuid = UnicodeAttribute(hash_key=True)
-    state = NumberAttribute(null=True)
+    status = UnicodeAttribute(null=True)
     desired_filename = UnicodeAttribute(null=False)
+    num_pages = NumberAttribute(null=True)
+    pages = ListAttribute(of=SinglePage)
     filename = UnicodeAttribute(null=True)
     createdAt = UTCDateTimeAttribute(null=False, default=datetime.now())
     updatedAt = MVPDateTime(null=True)
