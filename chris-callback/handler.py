@@ -15,18 +15,24 @@ def start_task_and_wait_for_callback(event, context):
     # TODO: create a Lambda exception and see how SNF detects it
     chance = random()
     print(f'chance={chance}')
-    if chance > 0.66:
+    if chance > 0.75:
         print(f'sending success...')
         res = sfn.send_task_success(taskToken=task_token,
                                     output=json.dumps({'msg': 'WHATEVER DUDE',
                                                        'chance': chance,
                                                        'taskToken': task_token}))
         print(f'sendTaskSuccess res={res}')
-    elif chance > 0.33:
+    elif chance > 0.50:
         print(f'sending failure: error and cause go to next step input')
         res = sfn.send_task_failure(taskToken=task_token,
                                     error='UnluckyError',
                                     cause=f'You were unlucky, chance={chance}')
+        print(f'sendTaskFailure res={res}')
+    elif chance > 0.25:
+        print(f'sending failure: error and cause go to next step input')
+        res = sfn.send_task_failure(taskToken=task_token,
+                                    error='SadPath',
+                                    cause=f'This is not the happy path, chance={chance}')
         print(f'sendTaskFailure res={res}')
     else:
         raise RuntimeError(f'Simulated unhandled logic error chance={chance}')
@@ -39,10 +45,10 @@ def notify_success(event, context):
 
 
 def notify_unlucky(event, contect):
-    print(f'unluck error: event={event}')
+    print(f'unlucky: event={event}')
     return {'msg': f'Your state machine was unlucky today event={event}'}
 
 
-# def notify_task_failed(event, context):
-#     print(f'task failed: event={event}')
-#     return {'msg': 'Task Failed, can we get Python traceback?'}
+def notify_sad_path(event, contect):
+    print(f'sad_path: event={event}')
+    return {'msg': f'Sorry, this was not the happy path event={event}'}

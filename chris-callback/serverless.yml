@@ -51,8 +51,11 @@ stepFunctions:
                 taskToken.$: $$.Task.Token
             Next: NotifySuccess
             Catch:
-            - ErrorEquals: ["UnluckyError"] # this has to be before TaskFailed?
+            # Put our named failures before generic TaskFailed
+            - ErrorEquals: ["UnluckyError"]
               Next: NotifyUnlucky
+            - ErrorEquals: ["SadPath"]
+              Next: NotifySadPath
             - ErrorEquals: ["States.TaskFailed"]
               Next: NotifyTaskFailed
           NotifySuccess:
@@ -62,12 +65,16 @@ stepFunctions:
           NotifyUnlucky:
             Type: Task
             Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyUnlucky"
-            End: true           # but still seen as success
+            End: true           # treated as success, but could Next to a Fail state
+          NotifySadPath:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifySadPath"
+            End: true           # treated as success, but could Next to a Fail state
           NotifyTaskFailed:
+            # Cause and Error are optional
             Type: Fail
-            Cause: Unhandled error in code
-            #Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-NotifyTaskFailed"
-            #End: 
+            Error: You have an unhandled error in your code
+            Cause: check the input to this state for the traceback
 
 functions:
   StartTaskAndWaitForCallback:
@@ -76,3 +83,5 @@ functions:
     handler: handler.notify_success
   NotifyUnlucky:
     handler: handler.notify_unlucky
+  NotifySadPath:
+    handler: handler.notify_sad_path
