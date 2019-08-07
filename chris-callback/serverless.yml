@@ -32,6 +32,10 @@ provider:
 stepFunctions:
   stateMachines:
     ChrisCallback:
+      events:
+        - http:
+            path: start
+            method: GET
       definition:
         StartAt: StartTaskAndWaitForCallback
         States:
