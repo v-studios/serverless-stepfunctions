@@ -29,6 +29,9 @@ provider:
       Ref: WaitForOcrPageStepFunctionsActivity
     REGION: ${self:provider.region}
     PDFUPLOAD_TABLE: PDFUpload-${self:provider.stage}
+    UPLOAD_BUCKET_NAME: doc-pdfs
+    UPLOAD_PDF_DIR: doc_pdf
+    UPLOAD_SPLIT_PDF_DIR: page_pdf
   iamRoleStatements:
     - Effect: Allow
       Action:
@@ -52,12 +55,12 @@ provider:
           - ''
           - - 'arn:'
             - Ref: AWS::Partition
-            - ':s3:::doc-pdfs'
+            - ":s3:::${self:provider.environment.UPLOAD_BUCKET_NAME}"
         - Fn::Join:
           - ''
           - - 'arn:'
             - Ref: AWS::Partition
-            - ':s3:::doc-pdfs/*'
+            - ":s3:::${self:provider.environment.UPLOAD_BUCKET_NAME}/*"
     - Effect: Allow
       Action:
         - dynamodb:Query
@@ -102,10 +105,10 @@ functions:
       handler: handler.uploaded
       events:
        - s3:
-           bucket: doc-pdfs  # TODO use the custom or environment var
+           bucket: ${self:provider.environment.UPLOAD_BUCKET_NAME}  # TODO use the custom or environment var
            event: s3:ObjectCreated:*
            rules:
-             - prefix: doc_pdf/
+             - prefix: "${self:provider.environment.UPLOAD_PDF_DIR}/"
              - suffix: .pdf
       timeout: 20
   StartStateMachine:
@@ -116,10 +119,10 @@ functions:
     handler: handler.ocr_page
     events:
      - s3:
-         bucket: doc-pdfs   # TODO use the custom or environment var
+         bucket: ${self:provider.environment.UPLOAD_BUCKET_NAME}   # TODO use the custom or environment var
          event: s3:ObjectCreated:*
          rules:
-           - prefix: page_pdf/
+           - prefix: "${self:provider.environment.UPLOAD_SPLIT_PDF_DIR}/"
            - suffix: .pdf
     timeout: 20
   # InformUser:

@@ -11,9 +11,10 @@ from models import PDFUpload, SinglePage
 from uuid import uuid4
 from datetime import datetime
 from PyPDF2 import PdfFileReader, PdfFileWriter
-UPLOAD_BUCKET_NAME = "doc-pdfs"
-STATEMACHINE_ARN = os.environ.get('STATEMACHINE_ARN', "")
 
+UPLOAD_BUCKET_NAME = os.environ.get('UPLOAD_BUCKET_NAME', "")
+STATEMACHINE_ARN = os.environ.get('STATEMACHINE_ARN', "")
+ACTIVITY_OCR_DONE_ARN = os.environ.get('ACTIVITY_OCR_DONE_ARN', "")
 STARTMARK = b"\xff\xd8"
 STARTFIX = 0
 ENDMARK = b"\xff\xd9"
@@ -22,9 +23,15 @@ ENDFIX = 2
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger()
 LOG.setLevel(logging.INFO)
-S3 = boto3.client('s3')  # Unneeded: config=boto3.session.Config(signature_version='s3v4'))
-s3 = None
-
+S3C = boto3.client('s3')  # Unneeded: config=boto3.session.Config(signature_version='s3v4'))
+S3R = None
+# Call Amazon Textract
+TX = boto3.client(
+    service_name='textract',
+    region_name='us-east-1',
+    endpoint_url='https://textract.us-east-1.amazonaws.com',
+)
+SF = boto3.client('stepfunctions')
 
 def get_upload_url(event, _context):
     """Return presigned URL to PUT file to our S3 bucket with read access.
@@ -81,9 +88,9 @@ def get_upload_url(event, _context):
         # 'ServerSideEncryption': 'AES256'
     }
     LOG.info(f'PSURL params={params}')
-    url = S3.generate_presigned_url(ClientMethod='put_object',
-                                    Params=params,
-                                    ExpiresIn=3600)
+    url = S3C.generate_presigned_url(ClientMethod='put_object',
+                                     Params=params,
+                                     ExpiresIn=3600)
     LOG.debug('url=%s', url)
     return {'statusCode': 200,
             'headers': {'Access-Control-Allow-Origin': '*'},  # for CORS
@@ -108,7 +115,7 @@ def split_doc_pdf(event, context):
         out = io.BytesIO()
         pdf_writer.write(out)
         out.seek(0)
-        S3.upload_fileobj(out, bucket, pdf_key)
+        S3C.upload_fileobj(out, bucket, pdf_key)
         LOG.info(f'uploaded page_num={page_num}')
     pdf_upload = PDFUpload.get(hash_key=jid)
     # update PDFUpload
@@ -132,16 +139,16 @@ def uploaded(event, context):
     etag = s3rec['object']['eTag']
     _doc_pdf, jid, name_pdf = key.split('/')
     LOG.info(f'bucket={bucket} etag={etag} size={size} key={key} jid={jid} name_pdf={name_pdf}')
-    sf = boto3.client('stepfunctions')
+
     sf_input = dumps({'bucket': bucket, 'key': key, 'etag': etag,
                       'size': size, 'jid': jid, 'name_pdf': name_pdf})
     # For now, suffix jid with UUID so we can submit the same job URL again
     uid = uuid4().hex
     file_info = save_info(name_pdf, jid)
-    res = sf.start_execution(stateMachineArn=STATEMACHINE_ARN,
+    res = SF.start_execution(stateMachineArn=STATEMACHINE_ARN,
                              name=f'{jid}',  # use our JobID as unique SM invocation ID
                              input=sf_input)  # state needs JSON str input
-    LOG.info(f'sf.start_execurtion res={res}')
+    LOG.info(f'SF.start_execurtion res={res}')
 
 
 def start_state_machine(event, context):
@@ -187,12 +194,12 @@ def ocr_page(event, context):
     LOG.info(f'bucket={bucket} key={key} jid={jid} name_pdf={name_pdf}')
 
     detected_text = get_textract_data(bucket, key)
-    write_textract_to_s3(detected_text, bucket, key)
+    s3_ocred_file_path = write_textract_to_s3(detected_text, bucket, key)
     pdf_upload = PDFUpload.get(hash_key=jid)
-    update_db_after_ocr(pdf_upload, detected_text, name_pdf, jid)
+    update_db_after_ocr(pdf_upload, s3_ocred_file_path, name_pdf, jid)
 
     # Pretend we've discovered we've finished all the pages
-    if check_orc_done(pdf_upload, jid):
+    if check_ocr_done(pdf_upload, jid):
         # update db
         pdf_upload.update_with_log(
             actions=[
@@ -207,13 +214,7 @@ def get_textract_data(bucket, key):
     LOG.info(f'Loading get_textract_data bucket:{bucket}, key:{key}')
     # convert to jpg
     jpg_file = extract_jpg_from_pdf(bucket, key)
-    # Call Amazon Textract
-    tx = boto3.client(
-        service_name='textract',
-        region_name='us-east-1',
-        endpoint_url='https://textract.us-east-1.amazonaws.com',
-    )
-    response = tx.detect_document_text(
+    response = TX.detect_document_text(
         Document={
             'Bytes': jpg_file
         })
@@ -230,16 +231,16 @@ def write_textract_to_s3(textract_data, bucket, key):
     """Save detected text to S3."""
     LOG.info(f'Loading write_textract_to_s3 bucket:{bucket}, key:{key}')
     generate_path = os.path.splitext(key)[0] + '.txt'
-    s3client = boto3.client('s3')
-    s3client.put_object(Body=textract_data, Bucket=bucket, Key=generate_path)
+    S3C.put_object(Body=textract_data, Bucket=bucket, Key=generate_path)
     LOG.info(f'generateFilePath: {generate_path}')
+    return generate_path
 
 
-def update_db_after_ocr(pdf_upload, content, name, jid):
+def update_db_after_ocr(pdf_upload, file_path, name, jid):
     """Update PDFUpload after finishing orc."""
     page = SinglePage(
         page_id=name[:4],
-        content=content
+        file_path=file_path
     )
     pages = pdf_upload.pages
     if pages:
@@ -254,13 +255,13 @@ def update_db_after_ocr(pdf_upload, content, name, jid):
         ])
 
 
-def check_orc_done(pdf_upload, jid):
+def check_ocr_done(pdf_upload, jid):
     """Get db & check done."""
-    LOG.info(f'loading check_orc_done')
+    LOG.info(f'loading check_ocr_done')
     num_pages = pdf_upload.num_pages
     pages = pdf_upload.pages
     pages_len = 0 if not pages else len(pages)
-    LOG.info(f'check_orc_done: num_pages:{num_pages}, pages_len={pages_len}')
+    LOG.info(f'check_ocr_done: num_pages:{num_pages}, pages_len={pages_len}')
     if num_pages == pages_len:
         return True
     else:
@@ -270,19 +271,17 @@ def check_orc_done(pdf_upload, jid):
 def send_task_ocr_activity(worker_name):
     """After ocr's done, send task success to WaitOcr activity."""
     try:
-        activity_arn = os.environ.get('ACTIVITY_OCR_DONE_ARN', "")
-        sf = boto3.client('stepfunctions')
-        response = sf.get_activity_task(
-            activityArn=activity_arn,
+        response = SF.get_activity_task(
+            activityArn=ACTIVITY_OCR_DONE_ARN,
             workerName=worker_name
         )
         LOG.info(f'activityArn={activity_arn}, sf_activity={response}')
         sf_input = dumps(response['input'])
-        res = sf.send_task_success(
+        res = SF.send_task_success(
             taskToken=response["taskToken"],
             output=sf_input
         )
-        LOG.info(f'sf.send_task_success={res}')
+        LOG.info(f'SF.send_task_success={res}')
     except ClientError as e:
         LOG.error(e)
 
@@ -306,16 +305,13 @@ def extract_jpg_from_pdf(bucket, key):
     i = 0
     while True:
         istream = pdf.find(b"stream", i)
-        LOG.info('extract_jpg_from_pdf istream {}'.format(istream))
         if istream < 0:
             break
         istart = pdf.find(STARTMARK, istream, istream + 20)
-        LOG.info('extract_jpg_from_pdf istart {}'.format(istart))
         if istart < 0:
             i = istream + 20
             continue
         iend = pdf.find(b"endstream", istart)
-        LOG.info('extract_jpg_from_pdf iend {}'.format(iend))
         if iend < 0:
             raise Exception("Did not find end of stream!")
         iend = pdf.find(ENDMARK, iend - 20)
@@ -323,7 +319,6 @@ def extract_jpg_from_pdf(bucket, key):
             raise Exception("Did not find end of JPG!")
         istart += STARTFIX
         iend += ENDFIX
-        LOG.info("JPG from %d to %d" % (istart, iend))
         jpg = pdf[istart:iend]
         return jpg
     raise Exception(f"Could not extract JPG from bucket={bucket}, key={key}")
@@ -337,8 +332,8 @@ def download(bucket_name, key, path):
     param str path: path on the local disk to save the object to
     return: None
     """
-    s3 = get_s3_resource()
-    bucket = s3.Bucket(bucket_name)
+    S3R = get_s3_resource()
+    bucket = S3R.Bucket(bucket_name)
     s3_url = 's3://{}/{}'.format(bucket_name, key)
     LOG.info('downloading {} to {}'.format(s3_url, path))
     try:
@@ -356,8 +351,8 @@ def get_s3_resource():
     performance boost. It's perhaps not as good as doing it in each lambda
     outside the handler, but good enough, and requires no lambda function changes.
     """
-    global s3
-    if s3 is None:
+    global S3R
+    if S3R is None:
         LOG.info('get_s3_resource initializing new connection')
-        s3 = boto3.resource('s3')
-    return s3
+        S3R = boto3.resource('s3')
+    return S3R

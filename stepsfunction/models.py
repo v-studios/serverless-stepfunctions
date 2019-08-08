@@ -35,7 +35,7 @@ class SinglePage(MapAttribute):
     """Page."""
 
     page_id = UnicodeAttribute()
-    content = UnicodeAttribute()
+    file_path = UnicodeAttribute()
 
 
 class PDFUpload(Model):
