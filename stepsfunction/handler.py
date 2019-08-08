@@ -275,7 +275,7 @@ def send_task_ocr_activity(worker_name):
             activityArn=ACTIVITY_OCR_DONE_ARN,
             workerName=worker_name
         )
-        LOG.info(f'activityArn={activity_arn}, sf_activity={response}')
+        LOG.info(f'activityArn={ACTIVITY_OCR_DONE_ARN}, sf_activity={response}')
         sf_input = dumps(response['input'])
         res = SF.send_task_success(
             taskToken=response["taskToken"],
