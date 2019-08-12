@@ -125,12 +125,6 @@ functions:
            - prefix: "${self:provider.environment.UPLOAD_SPLIT_PDF_DIR}/"
            - suffix: .pdf
     timeout: 20
-  # InformUser:
-  #     handler: handler.inform_user
-  #     events:
-  #       - sns: NotifyOCRTopic
-  #     environment:
-  #       SNS_TOPIC_ARN: { "Fn::Join" : [":", ["arn:aws:sns:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "NotifyOCRTopic" ] ]  }
 
 stepFunctions:
   stateMachines:
@@ -151,6 +145,15 @@ stepFunctions:
               Fn::GetAtt: [SplitPdfLambdaFunction, Arn]
             Next: WaitForOcr
           WaitForOcr:
+            # Type: Task
+            # Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
+            # Parameters:
+            #   FunctionName:
+            #     # you can also use Fn::GetAtt to get the ARN
+            #     Fn::GetAtt: [StartTaskAndWaitForCallbackLambdaFunction, Arn]
+            #   Payload:
+            #     taskToken.$: $$.Task.Token
+
             # All pages process lambdas run in parallel and each should detect when all pages are finished
             # (I plan to use some clever DynamoDB atomic updates to do this);
             # when lambda detects all done, it has to send a signal to release this wait state.
@@ -161,9 +164,17 @@ stepFunctions:
             # Type:  ### can I use a simple ref?
             #   Ref: WaitForOcrStepFunctionsActivity
             Next: DeclareVictory
+            Catch:
+            # Put our named failures before generic TaskFailed
+            - ErrorEquals: ["CannotRecover", "State.Timeout"]
+              Next: TaskFailed
           DeclareVictory:
             Type: Pass
             End: true
+          TaskFailed:
+            Type: Fail
+            Error: You have an unhandled error in your code
+            Cause: check the input to this state for the traceback
   activities:
     # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
     - WaitForOcrPage

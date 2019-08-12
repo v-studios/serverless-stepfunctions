@@ -33,6 +33,7 @@ TX = boto3.client(
 )
 SF = boto3.client('stepfunctions')
 
+
 def get_upload_url(event, _context):
     """Return presigned URL to PUT file to our S3 bucket with read access.
 
@@ -282,8 +283,12 @@ def send_task_ocr_activity(worker_name):
             output=sf_input
         )
         LOG.info(f'SF.send_task_success={res}')
-    except ClientError as e:
+    except Exception as e:
         LOG.error(e)
+        # Go to FailTask here
+        SF.send_task_failure(taskToken=response["taskToken"],
+                             error='CannotRecover',
+                             cause=f'We coud not recover')
 
 
 def extract_jpg_from_pdf(bucket, key):
