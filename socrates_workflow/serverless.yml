@@ -33,28 +33,92 @@ stepFunctions:
           RequestUpload:
             Comment: Start here with a timeout-failure, or just start at Uploaded triggered by S3
             Type: Pass
+            #Next: Uploaded
+            Next: WaitForUpload
+          WaitForUpload:
+            Comment: we want to wait, not execute and Lambda and wait, for the s3 upload, how? Hong's activity?
+            # https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-task-state.html
+            Type: Task
+            TimeoutSeconds: 3600  # only wait an hour for the user to upload the file, then kill the job
+            Resource:  arn:aws:states:::lambda:invoke.waitForTaskToken
+            Parameters:
+              FunctionName: ${self:service}-${opt:stage}-WaitForUpload
+              Payload:
+                taskToken.$: $$.Task.Token
             Next: Uploaded
+            Catch:
+            - ErrorEquals: ["States.Timeout"]
+              Next: UploadTimedOut  
+          UploadTimedOut:
+            Comment: update the DDB to remove the job, then go to Fail state
+            Type: Pass
+            Next: UploadTimedOutFail
+          UploadTimedOutFail:
+            Type: Fail
+            Error: UploadTimedOut
+            Cause: We provided a file upload URL but it was not uploaded in time
           Uploaded:
             Comment: S3 triggers a lambda that does SFN callback to start the machine here
-            Type: Pass
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-Uploaded"
             Next: SplitPdf
           SplitPdf:
             Comment: Split the PDF doc into PDF pages dropped on S3 which launches OCR lambfdas
-            Type: Pass
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SplitPdf"
             Next: WaitForOcr
+            Catch:
+            - ErrorEquals: ["States.TaskFailed"]
+              Next: SplitPdfError
+          SplitPdfError:
+            Comment: record the failure, then maybe cleanup the job
+            Type: Pass
+            Next: SplitPdfFail
+          SplitPdfFail:
+            Type: Fail
+            Error: SplitPdfFail
+            Cause: Something went terribly wrong splitting the PDF doc into pages
           WaitForOcr:
             Comment: The Split lamdas atomically update+query DynamoDB and when we have all, send SFN callback
-            Type: Pass
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-WaitForOcr"
             Next: CreateOutput
+            Catch:
+            - ErrorEquals: ["States.TaskFailed"]
+              Next: WaitForOcrError
+          WaitForOcrError:
+            Comment: clean up the job
+            Type: Pass
+            Next: WaitForOcrFail
+          WaitForOcrFail:
+            Type: Fail
+            Error: WaitForOcr
+            Cause: OCRing some of the pages failed, and that is all we know, sorry
           CreateOutput:
             Comment: Read all the pages of text and assemble to JSON, waits for Lambda triggered by S3 JSON to send SFN callback, maybe we only do this when requested for Download
-            Type: Pass
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-CreateOutput"
             Next: Processed
+            Catch:
+            - ErrorEquals: ["States.TaskFailed"]
+              Next: CreateOutputError
+          CreateOutputError:
+            Comment: clean up the job
+            Type: Pass
+            Next: CreateOutputFail
+          CreateOutputFail:
+            Type: Fail
+            Error: CreateOutput
+            Cause: WTF happened, creating the output shold be easy
           Processed:
             Comment: Our doc is ready for download, update DDB, maybe send notice, and wait for user, maybe thjis should be an End/Success state, and API GET to Download or API DELETE to Delete runs mini machine for those
             Type: Choice
+            # I actually don't think we want Download and Delete as part of the StateMachine,
+            # and don't think we need mini-statemachines to handle each of those.
+            # Processed should be a "Type: Succeed" end state.
+            # APIG + Lambda should handle GET request to Download, and DELETE to Delete, with update DDB status
             Choices:
-            # variables passed through the states must includ JID
+            # variables passed through the states must include JID
             - Variable: $.api_request
               StringEquals: downlaod
               Next: Download
