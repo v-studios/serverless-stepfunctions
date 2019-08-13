@@ -8,7 +8,7 @@
     "serverless-step-functions": "^2.1.0"
   },
   "devDependencies": {
-    "serverless": "^1.47.0"
+    "serverless": "^1.49.0"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
