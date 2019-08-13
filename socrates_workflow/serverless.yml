@@ -1,0 +1,40 @@
+service: socrates-workflow
+frameworkVersion: "=1.49.0"
+
+# for "sls dashboard"
+app: socrates-workflow
+tenant: chrisvstudios
+
+plugins:
+  - serverless-pseudo-parameters
+  - serverless-step-functions
+
+provider:
+  name: aws
+  runtime: python3.7
+  stage: dev
+  region: us-east-1
+  logRetentionInDays: 14
+
+# package:
+#  include:
+#    - include-me.py
+#    - include-me-dir/**
+#  exclude:
+#    - exclude-me.py
+#    - exclude-me-dir/**
+
+stepFunctions:
+  stateMachines:
+    SocratesMvp:
+      definition:
+        StartAt: START
+        States:
+          START:
+            Type: Pass
+            Next: SECOND
+          SECOND:
+            Type: Pass
+            Next: DONE
+          DONE:
+            Type: Succeed
