@@ -16,25 +16,67 @@ provider:
   region: us-east-1
   logRetentionInDays: 14
 
-# package:
-#  include:
-#    - include-me.py
-#    - include-me-dir/**
-#  exclude:
-#    - exclude-me.py
-#    - exclude-me-dir/**
+package:
+  exclude:
+    #- node_modules/**
+    - README.rst
+    # - package.json
+    # - package-lock.json
+    # - .git/**
 
 stepFunctions:
   stateMachines:
     SocratesMvp:
       definition:
-        StartAt: START
+        StartAt: RequestUpload
         States:
-          START:
+          RequestUpload:
+            Comment: Start here with a timeout-failure, or just start at Uploaded triggered by S3
             Type: Pass
-            Next: SECOND
-          SECOND:
+            Next: Uploaded
+          Uploaded:
+            Comment: S3 triggers a lambda that does SFN callback to start the machine here
             Type: Pass
-            Next: DONE
-          DONE:
+            Next: SplitPdf
+          SplitPdf:
+            Comment: Split the PDF doc into PDF pages dropped on S3 which launches OCR lambfdas
+            Type: Pass
+            Next: WaitForOcr
+          WaitForOcr:
+            Comment: The Split lamdas atomically update+query DynamoDB and when we have all, send SFN callback
+            Type: Pass
+            Next: CreateOutput
+          CreateOutput:
+            Comment: Read all the pages of text and assemble to JSON, waits for Lambda triggered by S3 JSON to send SFN callback, maybe we only do this when requested for Download
+            Type: Pass
+            Next: Processed
+          Processed:
+            Comment: Our doc is ready for download, update DDB, maybe send notice, and wait for user, maybe thjis should be an End/Success state, and API GET to Download or API DELETE to Delete runs mini machine for those
+            Type: Choice
+            Choices:
+            # variables passed through the states must includ JID
+            - Variable: $.api_request
+              StringEquals: downlaod
+              Next: Download
+            - Variable: $.api_request
+              StringEquals: delete
+              Next: Delete
+            Default: ProcessedChoiceError
+          ProcessedChoiceError:
+            Type: Fail
+            Error: ProcessedChoice
+            Cause: We were expecting var api_request to be download or delete
+          Download:
+            Comment: Download the file based on API GET /jid
+            Type: Pass
+            Next: Downloaded
+          Downloaded: 
+            Comment: File downloaded with no problem, we're done
+            Type: Succeed
+          Delete:
+            Comment: Delete all the job artifacts based on API DELETE /jid
+            Type: Pass
+            Next: Deleted
+          Deleted:
+            Comment: Stuff deleted OK, we're done
             Type: Succeed
