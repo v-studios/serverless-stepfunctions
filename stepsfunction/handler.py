@@ -213,11 +213,12 @@ def ocr_page(event, context):
         detected_text = get_textract_data(bucket, key)
     else:
         detected_text = ocr_by_tesseract(bucket, key)
+        _cleanup()
 
     s3_ocred_file_path = write_textract_to_s3(detected_text, bucket, key, type=type)
     pdf_upload = PDFUpload.get(hash_key=jid)
     update_db_after_ocr(pdf_upload, s3_ocred_file_path, name_pdf, jid)
-    _cleanup()
+
     # Pretend we've discovered we've finished all the pages
     if check_ocr_done(pdf_upload, jid):
         # update db
@@ -383,13 +384,11 @@ def get_s3_resource():
 
 
 def ocr_by_tesseract(bucket, key):
-    """Convert PDF to TIF single page, then OCR with tesseract.
+    """Convert PDF to JPG single page, then OCR with tesseract.
 
-    :param str key: key name of PDF page for logging
+    :params: bucket name and key of single PDF file on S3
     :returns: extracted text as a str
     """
-    # This gs produces much smaller TIF and more clear at 720
-    # than ImageMagick's 'convert' at similar densities
     LOG.info('ocr_by_tesseract converting page PDF to JPG: bucket {}, key {}'.format(bucket, key))
     jpg = extract_jpg_from_pdf(bucket, key)
     jpgfile = open("/tmp/jpgextracted.jpg", "wb")
@@ -417,13 +416,9 @@ def run(cmd):
 
 
 def _cleanup():
-    """Remove S3 page pdf and downloaded tmp file.
-
-    :param str bucket_name: S3 bucket name
-    :param str key: page pdf key, like page_pdf/docname.pdf/0000.pdf
+    """Remove files on tmp after orc by tesseract done
     :returns: nothing
     """
     LOG.info('Removing tmp page pdf, tif files and S3 page')
     os.remove('/tmp/page.pdf')
     os.remove('/tmp/jpgextracted.jpg')
-    # remove_s3_item(bucket_name, key)
