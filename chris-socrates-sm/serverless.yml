@@ -1,0 +1,139 @@
+# 1. User requests upload URL from Lambda API, gets URL including a JobID
+# 2. User PUTs to URL on S3
+# 3. S3 event triggers a Lambda which starts the statemachine
+# 4. Statemachine:
+# 4.1. adds info to DB
+# 4.2. splits pages and updates DB
+# 4.3. declare victory
+# Later each PDF page on S3 triggers lambdas which convert, OCR, and update DB, and checks DB for completion
+# When complete, advances workflow to some next state, like sending to search, alerting user; for now, mark it Done
+
+service: chris-socrates-sm
+
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+
+package:
+  # We want to package PyPDF, but really only with the pdf_split lambda
+  exclude:
+    - .pytest_cache/**
+    - .serverless/**
+    - Pipfile
+    - __pycache__/**
+    - event-s3upload.json
+    - serverless.yml
+    - test_handler.py
+
+# TODO: I can't get the bucket_name variable refs working right, hard code them for now, sorry.
+
+custom:
+  bucket_name: ${self:service}-${self:provider.stage}-${env:USER}        # bucket name is based on $USER
+
+provider:
+  name: aws
+  runtime: python3.7            # as of 2019-07-18 python 3.7 is the latest
+  stage: dev
+  #region: ap-southeast-1        # hong
+  region: us-east-1             # chris
+  logRetentionInDays: 14
+  environment:
+    STATEMACHINE_ARN:
+      Ref: SocratesChrisStepFunctionsStateMachine
+    ACTIVITY_OCR_DONE_ARN: #      "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
+      Ref: WaitForOcrStepFunctionsActivity
+    ACTIVITY_ARN: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForUpload"
+    #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
+    #BUCKET_NAME: ${self:custom.bucket_name}
+    BUCKET_NAME: ${self:service}-${self:provider.stage}-${env:USER}
+  iamRoleStatements:
+    # Allow the lambda to generate a PSURL that can upload a file via put_object
+    - Effect: Allow
+      Action:
+        - s3:DeleteObject
+        - s3:GetObject
+        - s3:PutObject
+        - s3:ListBucket
+      Resource: 
+        - "arn:aws:s3:::${self:service}-${self:provider.stage}-${env:USER}"     # TODO use the custom or environment var
+        - "arn:aws:s3:::${self:service}-${self:provider.stage}-${env:USER}/*"   # TODO use the custom or environment var
+    - Effect: Allow
+      Action:
+        - states:StartExecution
+      Resource: 
+        Ref: SocratesChrisStepFunctionsStateMachine
+    - Effect: Allow
+      Action:
+      - states:GetActivityTask
+      - states:SendTaskFailure
+      - states:SendTaskHeartbeat # what is this for?
+      - states:SendTaskSuccess
+      Resource: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
+      #  Fn::GetAtt: [WaitForUploadStepFunctionsActivity, Arn]
+
+functions:
+  GetUploadUrl:
+    description: return S3 presigned URL with JobId and filename to allow upload doc_pdf/jid/name.pdf
+    handler: handler.get_upload_url
+    events:
+    - http: GET /uploadurl
+  Uploaded:
+    description: on S3 upload event, add some info to DB, start the state machine
+    handler: handler.uploaded
+    events:
+     - s3:
+         bucket: ${self:service}-${self:provider.stage}-${env:USER}   # TODO use the custom or environment var
+         event: s3:ObjectCreated:*
+         rules:
+           - prefix: doc_pdf/
+           - suffix: .pdf
+  StartStateMachine:
+    description: the upload invokes the statemachine where we do our log it and go to next state
+    handler: handler.start_state_machine
+  SplitPdf:
+    description: triggered by statemachine bread doc_pdf/jid/name.pdf into pages page_pdf/jid/0000.pdf
+    handler: handler.split_pdf
+  OcrPage:
+    description: convert PDF to TIF/PNG and run Tesseract to output text to page_txt/jid/0000.txt and check for all-done
+    handler: handler.ocr_page
+    events:
+     - s3:
+         bucket: ${self:service}-${self:provider.stage}-${env:USER}   # TODO use the custom or environment var
+         event: s3:ObjectCreated:*
+         rules:
+           - prefix: page_pdf/
+           - suffix: .pdf
+
+stepFunctions:
+  stateMachines:
+    SocratesChris:
+      tags:
+        owner: chris@v-studios.com
+      definition:
+        Comment: start at upload then drive the lambdas
+        StartAt: StartStateMachine
+        States:
+          StartStateMachine:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-StartStateMachine"
+            Next: SplitPdf
+          SplitPdf:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SplitPdf"
+            Next: WaitForOcr
+          WaitForOcr:
+            # All pages process lambdas run in parallel and each should detect when all pages are finished
+            # (I plan to use some clever DynamoDB atomic updates to do this);
+            # when lambda detects all done, it has to send a signal to release this wait state.
+            Type: Task
+            Resource: "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcr"
+               #Ref: WaitForOcrStepFunctionsActivity   #Can I do someting like this?
+            Next: DeclareVictory
+          DeclareVictory:
+            Type: Pass
+            End: true
+
+  activities:
+    # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
+    - WaitForOcr
+
