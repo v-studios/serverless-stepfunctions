@@ -1,0 +1,215 @@
+service: stepFunctionsTest
+
+plugins:
+  - serverless-python-requirements
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+
+package:
+  exclude:
+    - node_modules/**
+    - venv/**
+    - .venv*/**
+    - README.md
+    - package.json
+    - package-lock.json
+    - .git/**
+
+custom:
+  pythonRequirements:
+    noDeploy: []
+
+provider:
+  name: aws
+  runtime: python3.6
+  environment:
+    STATEMACHINE_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:firstSteps" ] ]  }
+    ACTIVITY_ARN: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcrPage" ] ]  }
+    ACTIVITY_OCR_DONE_ARN: #      "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:activity:WaitForOcrPage"
+      Ref: WaitForOcrPageStepFunctionsActivity
+    REGION: ${self:provider.region}
+    PDFUPLOAD_TABLE: PDFUpload-${self:provider.stage}
+    UPLOAD_BUCKET_NAME: doc-pdfs
+    UPLOAD_PDF_DIR: doc_pdf
+    UPLOAD_SPLIT_PDF_DIR: page_pdf
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - states:GetActivityTask
+        - states:SendTaskSuccess
+        - states:SendTaskFailure
+        - states:SendTaskHeartbeat
+      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcrPage" ] ]  }
+    - Effect: Allow
+      Action:
+        - states:StartExecution
+      Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "stateMachine:firstSteps" ] ]  }
+    - Effect: Allow
+      Action:
+        - s3:DeleteObject
+        - s3:GetObject
+        - s3:PutObject
+        - s3:ListBucket
+      Resource:
+        - Fn::Join:
+          - ''
+          - - 'arn:'
+            - Ref: AWS::Partition
+            - ":s3:::${self:provider.environment.UPLOAD_BUCKET_NAME}"
+        - Fn::Join:
+          - ''
+          - - 'arn:'
+            - Ref: AWS::Partition
+            - ":s3:::${self:provider.environment.UPLOAD_BUCKET_NAME}/*"
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+        - dynamodb:DescribeTable
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.PDFUPLOAD_TABLE}"
+    # - Effect: Allow
+    #   Action:
+    #     - SNS:Publish
+    #   Resource: { "Fn::Join" : [":", ["arn:aws:sns:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "NotifyOCRTopic" ] ]  }
+    - Effect: Allow
+      Action:
+        - textract:DetectDocumentText
+      Resource: "*"
+
+# you can overwrite defaults here
+  stage: dev
+  region: ap-southeast-1
+
+functions:
+  SplitPdf:
+    handler: handler.split_doc_pdf
+  GetUploadUrl:
+    handler: handler.get_upload_url
+    events:
+      - http:
+          path: get_upload_url
+          method: GET
+          cors: true
+          authorizer:
+            type: COGNITO_USER_POOLS
+            authorizerId:
+              Ref: ApiGatewayAuthorizer
+
+
+  Uploaded:
+      description: on S3 upload event, add some info to DB, start the state machine
+      handler: handler.uploaded
+      events:
+       - s3:
+           bucket: ${self:provider.environment.UPLOAD_BUCKET_NAME}  # TODO use the custom or environment var
+           event: s3:ObjectCreated:*
+           rules:
+             - prefix: "${self:provider.environment.UPLOAD_PDF_DIR}/"
+             - suffix: .pdf
+      timeout: 20
+  StartStateMachine:
+    description: the upload invokes the statemachine where we do our log it and go to next state
+    handler: handler.start_state_machine
+  OcrPage:
+    description: convert PDF to TIF/PNG and run Tesseract to output text to page_txt/jid/0000.txt and check for all-done
+    handler: handler.ocr_page
+    events:
+     - s3:
+         bucket: ${self:provider.environment.UPLOAD_BUCKET_NAME}   # TODO use the custom or environment var
+         event: s3:ObjectCreated:*
+         rules:
+           - prefix: "${self:provider.environment.UPLOAD_SPLIT_PDF_DIR}/"
+           - suffix: .pdf
+    timeout: 20
+
+stepFunctions:
+  stateMachines:
+    MvpStepfunc:
+      name: firstSteps
+      definition:
+        Comment: start at upload then drive the lambdas
+        StartAt: StartStateMachine
+        States:
+          StartStateMachine:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [StartStateMachineLambdaFunction, Arn]
+            Next: SplitPdf
+          SplitPdf:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [SplitPdfLambdaFunction, Arn]
+            Next: WaitForOcr
+          WaitForOcr:
+            # Type: Task
+            # Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
+            # Parameters:
+            #   FunctionName:
+            #     # you can also use Fn::GetAtt to get the ARN
+            #     Fn::GetAtt: [StartTaskAndWaitForCallbackLambdaFunction, Arn]
+            #   Payload:
+            #     taskToken.$: $$.Task.Token
+
+            # All pages process lambdas run in parallel and each should detect when all pages are finished
+            # (I plan to use some clever DynamoDB atomic updates to do this);
+            # when lambda detects all done, it has to send a signal to release this wait state.
+            Type: Task
+            Resource: { "Fn::Join" : [":", ["arn:aws:states:${self:provider.region}", { "Ref" : "AWS::AccountId" }, "activity:WaitForOcrPage" ] ]  }
+            TimeoutSeconds: 300
+            HeartbeatSeconds: 60
+            # Type:  ### can I use a simple ref?
+            #   Ref: WaitForOcrStepFunctionsActivity
+            Next: DeclareVictory
+            Catch:
+            # Put our named failures before generic TaskFailed
+            - ErrorEquals: ["CannotRecover", "State.Timeout"]
+              Next: TaskFailed
+          DeclareVictory:
+            Type: Pass
+            End: true
+          TaskFailed:
+            Type: Fail
+            Error: You have an unhandled error in your code
+            Cause: check the input to this state for the traceback
+  activities:
+    # To reference ActivityName, use Fn::GetAtt [ActivityNameStepFunctionsActivity, Arn]
+    - WaitForOcrPage
+
+resources:
+  Resources:
+    PDFUploadDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          - 
+            AttributeName: uuid
+            AttributeType: S
+        KeySchema:
+          - 
+            AttributeName: uuid
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        TableName: ${self:provider.environment.PDFUPLOAD_TABLE}
+    ApiGatewayAuthorizer:
+      DependsOn:
+        - ApiGatewayRestApi
+      Type: AWS::ApiGateway::Authorizer
+      Properties:
+        Name: cognito-authorizer
+        IdentitySource: method.request.header.Authorization
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        Type: COGNITO_USER_POOLS
+        ProviderARNs: ["arn:aws:cognito-idp:ap-southeast-1:330477736997:userpool/ap-southeast-1_f0HFc28wf"]
+    # NotifyOCRTopic:
+    #     Type: AWS::SNS::Topic
+    #     Properties:
+    #     DisplayName: 'Inform to the user if the OCR finished'
+    #     TopicName: NotifyOCRTopic

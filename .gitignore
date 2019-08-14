@@ -1,4 +1,6 @@
 *~
 node_modules/
 venv/
-/chris-socrates-sm/.serverless/
+.venv/
+.serverless/
+__pycache__/
