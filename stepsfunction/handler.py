@@ -1,11 +1,15 @@
 """Simple example."""
 from json import dumps, loads
+import os
 import io
 import sys
 import boto3
+import random
 import botocore
 from botocore.exceptions import ClientError
 import logging
+import subprocess
+from time import sleep, time
 import os
 from models import PDFUpload, SinglePage
 from uuid import uuid4
@@ -19,6 +23,13 @@ STARTMARK = b"\xff\xd8"
 STARTFIX = 0
 ENDMARK = b"\xff\xd9"
 ENDFIX = 2
+
+
+# setting for tesseract
+TESSERACT_BIN = './tesseract/bin/tesseract'
+TESSERACT_DATA = './tesseract/share/tessdata'
+TESSERACT_LIB = './tesseract/lib'
+os.environ['LD_LIBRARY_PATH'] = ':'.join([os.environ['LD_LIBRARY_PATH'], TESSERACT_LIB])
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger()
@@ -194,8 +205,17 @@ def ocr_page(event, context):
     _doc_pdf, jid, name_pdf = key.split('/')
     LOG.info(f'bucket={bucket} key={key} jid={jid} name_pdf={name_pdf}')
 
-    detected_text = get_textract_data(bucket, key)
-    s3_ocred_file_path = write_textract_to_s3(detected_text, bucket, key)
+    # random to choose AWS Textract or Tesseract for OCR
+    random_choice = random.randrange(0, 2)
+    type = 'tesseract'
+    if random_choice == 1:
+        type = 'aws'
+        detected_text = get_textract_data(bucket, key)
+    else:
+        detected_text = ocr_by_tesseract(bucket, key)
+        _cleanup()
+
+    s3_ocred_file_path = write_textract_to_s3(detected_text, bucket, key, type=type)
     pdf_upload = PDFUpload.get(hash_key=jid)
     update_db_after_ocr(pdf_upload, s3_ocred_file_path, name_pdf, jid)
 
@@ -228,10 +248,10 @@ def get_textract_data(bucket, key):
     return detected_text
 
 
-def write_textract_to_s3(textract_data, bucket, key):
+def write_textract_to_s3(textract_data, bucket, key, type=''):
     """Save detected text to S3."""
     LOG.info(f'Loading write_textract_to_s3 bucket:{bucket}, key:{key}')
-    generate_path = os.path.splitext(key)[0] + '.txt'
+    generate_path = os.path.splitext(key)[0] + '_' + type + '.txt'
     S3C.put_object(Body=textract_data, Bucket=bucket, Key=generate_path)
     LOG.info(f'generateFilePath: {generate_path}')
     return generate_path
@@ -361,3 +381,44 @@ def get_s3_resource():
         LOG.info('get_s3_resource initializing new connection')
         S3R = boto3.resource('s3')
     return S3R
+
+
+def ocr_by_tesseract(bucket, key):
+    """Convert PDF to JPG single page, then OCR with tesseract.
+
+    :params: bucket name and key of single PDF file on S3
+    :returns: extracted text as a str
+    """
+    LOG.info('ocr_by_tesseract converting page PDF to JPG: bucket {}, key {}'.format(bucket, key))
+    jpg = extract_jpg_from_pdf(bucket, key)
+    jpgfile = open("/tmp/jpgextracted.jpg", "wb")
+    jpgfile.write(jpg)
+    jpgfile.close()
+    txt = run(f'{TESSERACT_BIN} --tessdata-dir {TESSERACT_DATA} /tmp/jpgextracted.jpg stdout')
+    return txt.decode('utf-8')
+
+
+def run(cmd):
+    """Run a command as a subprocess, return output, log output or errors."""
+    LOG.debug('RUN {}')
+    if isinstance(cmd, str):
+        cmd = cmd.split()
+    t_0 = time()
+    res = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    t_run = time() - t_0
+    if res.returncode == 0:
+        LOG.info('run run_seconds=%s cmd="%s"', t_run, cmd)
+        return res.stdout
+    else:
+        msg = 'run: {}'.format(res)
+        LOG.error(msg)
+        raise RuntimeError(msg)
+
+
+def _cleanup():
+    """Remove files on tmp after orc by tesseract done
+    :returns: nothing
+    """
+    LOG.info('Removing tmp page pdf, tif files and S3 page')
+    os.remove('/tmp/page.pdf')
+    os.remove('/tmp/jpgextracted.jpg')

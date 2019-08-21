@@ -87,6 +87,7 @@ provider:
 functions:
   SplitPdf:
     handler: handler.split_doc_pdf
+
   GetUploadUrl:
     handler: handler.get_upload_url
     events:
@@ -99,7 +100,6 @@ functions:
             authorizerId:
               Ref: ApiGatewayAuthorizer
 
-
   Uploaded:
       description: on S3 upload event, add some info to DB, start the state machine
       handler: handler.uploaded
@@ -110,10 +110,12 @@ functions:
            rules:
              - prefix: "${self:provider.environment.UPLOAD_PDF_DIR}/"
              - suffix: .pdf
-      timeout: 20
+      timeout: 60
+
   StartStateMachine:
     description: the upload invokes the statemachine where we do our log it and go to next state
     handler: handler.start_state_machine
+
   OcrPage:
     description: convert PDF to TIF/PNG and run Tesseract to output text to page_txt/jid/0000.txt and check for all-done
     handler: handler.ocr_page
@@ -124,7 +126,7 @@ functions:
          rules:
            - prefix: "${self:provider.environment.UPLOAD_SPLIT_PDF_DIR}/"
            - suffix: .pdf
-    timeout: 20
+    timeout: 120
 
 stepFunctions:
   stateMachines:
