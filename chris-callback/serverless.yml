@@ -1,0 +1,81 @@
+service: chriscallback
+
+plugins:
+  - serverless-pseudo-parameters
+  - serverless-step-functions
+
+provider:
+  name: aws
+  runtime: python3.7
+  stage: dev
+  region: us-east-1
+  logRetentionInDays: 14
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+      - states:SendTaskFailure
+      - states:SendTaskSuccess
+      Resource: 
+      - "arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:states:SendTaskSuccess"
+      - Ref: ChrisCallbackStepFunctionsStateMachine
+
+stepFunctions:
+  stateMachines:
+    ChrisCallback:
+      events:
+        - http:
+            path: start
+            method: GET
+      definition:
+        StartAt: StartTaskAndWaitForCallback
+        States:
+          StartTaskAndWaitForCallback:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
+            Parameters:
+              FunctionName: ${self:service}-${opt:stage}-StartTaskAndWaitForCallback
+              Payload:
+                yo: Mama
+                taskToken.$: $$.Task.Token
+            Next: HappyPath
+            Catch:
+            # Put our named failures before generic TaskFailed
+            - ErrorEquals: ["UnluckyError"]
+              Next: Unlucky
+            - ErrorEquals: ["SadPath"]
+              Next: SadPath
+            - ErrorEquals: ["CannotRecover"]
+              Next: CannotRecover
+            - ErrorEquals: ["States.TaskFailed"]
+              Next: TaskFailed
+          HappyPath:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-HappyPath"
+            End: true
+          SadPath:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-SadPath"
+            End: true           # treated as success, but could Next to a Fail state
+          Unlucky:
+            Type: Task
+            Resource: "arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-Unlucky"
+            End: true           # treated as success, but could Next to a Fail state
+          # For type FAIL, Error and Cause are optional
+          CannotRecover:
+            Type: Fail
+            Error: Sorry we could not recover from some problem
+            Cause: check the input to this state for the traceback
+          TaskFailed:
+            Type: Fail
+            Error: You have an unhandled error in your code
+            Cause: check the input to this state for the traceback
+
+functions:
+  StartTaskAndWaitForCallback:
+    handler: handler.start_task_and_wait_for_callback
+  HappyPath:
+    handler: handler.happy_path
+  Unlucky:
+    handler: handler.unlucky
+  SadPath:
+    handler: handler.sad_path
